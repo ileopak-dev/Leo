@@ -1,0 +1,10 @@
+{
+  "name": "lynqsys-patient-insights",
+  "private": true,
+  "workspaces": ["api", "ui", "shared"],
+  "scripts": {
+    "dev": "npm -w api run start:local & npm -w ui run dev",
+    "dev:api": "npm -w api run start:local",
+    "dev:ui": "npm -w ui run dev"
+  }
+}
