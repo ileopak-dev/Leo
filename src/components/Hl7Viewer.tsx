@@ -25,12 +25,49 @@ const SEGMENT_LABELS: Record<string, string> = {
   PR1: "Procedures",
 };
 
+const REQUIRED_FIELDS_BY_VERSION: Record<string, Record<string, number[]>> = {
+  default: {
+    MSH: [1, 2, 7, 9, 10, 11, 12],
+    PID: [3, 5],
+    PV1: [2],
+    NK1: [2, 3],
+    ORC: [1],
+    OBR: [4],
+    OBX: [2, 3, 5, 11],
+    RXA: [3, 5],
+    RXR: [1],
+  },
+  // Version-specific maps can diverge when needed.
+  "2.3": {
+    MSH: [1, 2, 7, 9, 10, 11, 12],
+    PID: [3, 5],
+    PV1: [2],
+    NK1: [2],
+    ORC: [1],
+    OBR: [4],
+    OBX: [2, 3, 5, 11],
+    RXA: [3, 5],
+    RXR: [1],
+  },
+  "2.5.1": {
+    MSH: [1, 2, 7, 9, 10, 11, 12],
+    PID: [3, 5],
+    PV1: [2],
+    NK1: [2, 3],
+    ORC: [1],
+    OBR: [4],
+    OBX: [2, 3, 5, 11],
+    RXA: [3, 5],
+    RXR: [1],
+  },
+};
+
 function safeChip(v: string): string {
   if (!v) return "—";
   return v.length > 64 ? v.slice(0, 61) + "…" : v;
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, any> = {
   shell: { display: "grid", gridTemplateColumns: "360px 1fr", height: "78vh", gap: 12 },
   panel: { background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 16 },
   panelPad: { padding: 12 },
@@ -93,6 +130,25 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid var(--dangerBorder)",
     fontSize: 12,
   },
+  missingPanel: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 14,
+    border: "1px solid #fca5a5",
+    background: "#fef2f2",
+  },
+  missingTitle: {
+    fontSize: 12,
+    fontWeight: 900,
+    color: "#991b1b",
+    marginBottom: 6,
+  },
+  missingItem: {
+    fontSize: 12,
+    color: "#7f1d1d",
+    marginBottom: 4,
+    fontFamily: "var(--mono)",
+  },
 
   tabsRow: { display: "flex", gap: 8, alignItems: "center" },
   tabBtn: (active: boolean) => ({
@@ -106,11 +162,78 @@ const styles: Record<string, React.CSSProperties> = {
   }),
 
   pre: { whiteSpace: "pre-wrap" as const, fontFamily: "var(--mono)", fontSize: 13, lineHeight: 1.55 },
+  rawParsedBox: {
+    border: "1px solid #c8d2e0",
+    borderRadius: 12,
+    background: "#f8fafc",
+    padding: 10,
+  },
+  rawParsedLine: {
+    fontFamily: "var(--mono)",
+    fontSize: 13,
+    lineHeight: 1.8,
+    wordBreak: "break-word" as const,
+  },
+  rawParsedSeg: {
+    color: "#0b3b67",
+    fontWeight: 900,
+    background: "#dbeafe",
+    border: "1px solid #93c5fd",
+    borderRadius: 6,
+    padding: "1px 6px",
+  },
+  rawParsedSep: {
+    color: "#9a3412",
+    fontWeight: 900,
+    padding: "0 2px",
+  },
+  rawParsedVal: {
+    color: "#111827",
+    background: "#eef2f7",
+    border: "1px solid #d6dde7",
+    borderRadius: 6,
+    padding: "1px 5px",
+  },
 
   fieldRow: { padding: "10px 0", borderBottom: "1px solid rgba(38,50,68,0.7)" },
   fieldTop: { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" },
   fieldKey: { fontWeight: 950, fontSize: 13 },
-  fieldRaw: { fontSize: 12, color: "var(--muted)", fontFamily: "var(--mono)" },
+  reqBadge: {
+    display: "inline-block",
+    marginLeft: 8,
+    fontSize: 10,
+    fontWeight: 900,
+    color: "#7c2d12",
+    background: "#ffedd5",
+    border: "1px solid #fdba74",
+    borderRadius: 999,
+    padding: "1px 6px",
+    verticalAlign: "middle",
+  },
+  missingReq: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: 800,
+    color: "#b91c1c",
+    background: "#fee2e2",
+    border: "1px solid #fca5a5",
+    borderRadius: 8,
+    display: "inline-block",
+    padding: "2px 8px",
+  },
+  fieldRaw: {
+    fontSize: 12,
+    fontFamily: "var(--mono)",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    border: "1px solid #c8d2e0",
+    background: "#f4f7fb",
+    borderRadius: 8,
+    padding: "2px 8px",
+  },
+  fieldRawLabel: { color: "#64748b", fontWeight: 800 },
+  fieldRawValue: { color: "#0f172a", fontWeight: 900 },
   fieldDef: { marginTop: 6, fontSize: 12, color: "var(--muted)" },
 
   table: { width: "100%", borderCollapse: "collapse" as const, fontSize: 13 },
@@ -137,6 +260,67 @@ export default function Hl7Viewer({ raw }: { raw: string }) {
   }, [msg.segments, filter]);
 
   const active = msg.segments[activeIdx];
+  const rawLines = useMemo(() => (active?.raw ?? "").split(/\r?\n/).filter(Boolean), [active?.raw]);
+  const hl7Version = useMemo(() => {
+    const msh = msg.segments.find((s) => s.name === "MSH");
+    return msh?.fields.find((f) => f.fieldIndex === 12)?.raw?.trim() || "";
+  }, [msg.segments]);
+  const requiredRuleVersion = useMemo(() => {
+    const v = hl7Version;
+    if (!v) return "default";
+    if (REQUIRED_FIELDS_BY_VERSION[v]) return v;
+    const majorMinorMatch = v.match(/^(\d+\.\d+)/);
+    const majorMinor = majorMinorMatch ? majorMinorMatch[1] : "";
+    if (majorMinor && REQUIRED_FIELDS_BY_VERSION[majorMinor]) return majorMinor;
+    return "default";
+  }, [hl7Version]);
+  const requiredRules = useMemo(
+    () => REQUIRED_FIELDS_BY_VERSION[requiredRuleVersion] ?? REQUIRED_FIELDS_BY_VERSION.default,
+    [requiredRuleVersion]
+  );
+  const missingRequiredRows = useMemo(() => {
+    const rows: Array<{ segment: string; fieldIndex: number; label: string; segmentOccurrence: number }> = [];
+    const segmentSeen: Record<string, number> = {};
+    for (const seg of msg.segments) {
+      segmentSeen[seg.name] = (segmentSeen[seg.name] ?? 0) + 1;
+      const required = requiredRules[seg.name] ?? [];
+      if (!required.length) continue;
+      for (const idx of required) {
+        const f = seg.fields.find((x) => x.fieldIndex === idx);
+        const rawValue = (f?.raw ?? "").trim();
+        if (!rawValue) {
+          rows.push({
+            segment: seg.name,
+            fieldIndex: idx,
+            label: COMMON_DICT[seg.name]?.fields?.[idx]?.label ?? "Field",
+            segmentOccurrence: segmentSeen[seg.name],
+          });
+        }
+      }
+    }
+    return rows;
+  }, [msg.segments, requiredRules]);
+
+  function renderParsedRawLine(line: string, lineIndex: number) {
+    const sep = msg.separators.field || "|";
+    const parts = line.split(sep);
+    if (parts.length === 0) return null;
+    return (
+      <div key={`raw-${lineIndex}`} style={styles.rawParsedLine}>
+        <span style={styles.rawParsedSeg}>{parts[0] || "SEG"}</span>
+        {parts.slice(1).map((p, i) => (
+          <React.Fragment key={`part-${lineIndex}-${i}`}>
+            <span style={styles.rawParsedSep}>{sep}</span>
+            <span style={styles.rawParsedVal}>{p === "" ? "∅" : p}</span>
+          </React.Fragment>
+        ))}
+      </div>
+    );
+  }
+
+  function isRequiredField(segment: string, fieldIndex: number): boolean {
+    return (requiredRules[segment] ?? []).includes(fieldIndex);
+  }
 
   return (
     <div style={styles.shell}>
@@ -202,6 +386,21 @@ export default function Hl7Viewer({ raw }: { raw: string }) {
               <b>Warnings:</b> {msg.errors.join(" ")}
             </div>
           ) : null}
+          {missingRequiredRows.length ? (
+            <div style={styles.missingPanel}>
+              <div style={styles.missingTitle}>Missing Required Fields ({missingRequiredRows.length})</div>
+              {missingRequiredRows.slice(0, 20).map((m, i) => (
+                <div key={`${m.segment}-${m.segmentOccurrence}-${m.fieldIndex}-${i}`} style={styles.missingItem}>
+                  {`${m.segment}[${m.segmentOccurrence}]-${m.fieldIndex} — ${m.label}`}
+                </div>
+              ))}
+              {missingRequiredRows.length > 20 ? (
+                <div style={{ ...styles.missingItem, fontFamily: "inherit" }}>
+                  +{missingRequiredRows.length - 20} more…
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div style={{ height: 12 }} />
@@ -220,6 +419,10 @@ export default function Hl7Viewer({ raw }: { raw: string }) {
               <b style={{ color: "var(--text)" }}>{msg.separators.component}</b> repetition{" "}
               <b style={{ color: "var(--text)" }}>{msg.separators.repetition}</b>
             </div>
+            <div style={styles.small}>
+              Required rules: <b style={{ color: "var(--text)" }}>HL7 {requiredRuleVersion}</b>
+              {hl7Version ? <span> (message: {hl7Version})</span> : null}
+            </div>
           </div>
 
           <div style={styles.tabsRow}>
@@ -236,13 +439,16 @@ export default function Hl7Viewer({ raw }: { raw: string }) {
         {!active ? (
           <div style={{ color: "var(--muted)" }}>Paste an HL7 message to begin.</div>
         ) : tab === "Raw" ? (
-          <pre style={styles.pre}>{active.raw}</pre>
+          <div style={styles.rawParsedBox}>
+            {rawLines.length === 0 ? <pre style={styles.pre}>{active.raw}</pre> : rawLines.map((line, i) => renderParsedRawLine(line, i))}
+          </div>
         ) : tab === "Grid" ? (
           <table style={styles.table}>
             <thead>
               <tr>
                 <th style={styles.th}>Field</th>
                 <th style={styles.th}>Label</th>
+                <th style={styles.th}>Required</th>
                 <th style={styles.th}>Raw</th>
                 <th style={styles.th}>Reps</th>
               </tr>
@@ -250,10 +456,12 @@ export default function Hl7Viewer({ raw }: { raw: string }) {
             <tbody>
               {active.fields.map((f) => {
                 const def = COMMON_DICT[active.name]?.fields?.[f.fieldIndex];
+                const required = isRequiredField(active.name, f.fieldIndex);
                 return (
                   <tr key={f.fieldIndex}>
                     <td style={{ ...styles.td, fontWeight: 950 }}>{active.name}-{f.fieldIndex}</td>
                     <td style={styles.td}>{def?.label ?? "—"}</td>
+                    <td style={styles.td}>{required ? "Yes" : "No"}</td>
                     <td style={{ ...styles.td, fontFamily: "var(--mono)" }}>{f.raw === "" ? "∅" : f.raw}</td>
                     <td style={styles.td}>{f.reps.length}</td>
                   </tr>
@@ -265,6 +473,7 @@ export default function Hl7Viewer({ raw }: { raw: string }) {
           <div>
             {active.fields.map((f) => {
               const def = COMMON_DICT[active.name]?.fields?.[f.fieldIndex];
+              const required = isRequiredField(active.name, f.fieldIndex);
               return (
                 <div key={f.fieldIndex} style={styles.fieldRow}>
                   <div style={styles.fieldTop}>
@@ -273,11 +482,16 @@ export default function Hl7Viewer({ raw }: { raw: string }) {
                       <span style={{ fontWeight: 700, color: "var(--muted)" }}>
                         — {def?.label ?? "Field"}
                       </span>
+                      {required ? <span style={styles.reqBadge}>Required</span> : null}
                     </div>
-                    <div style={styles.fieldRaw}>raw: {f.raw === "" ? "∅" : f.raw}</div>
+                    <div style={styles.fieldRaw}>
+                      <span style={styles.fieldRawLabel}>raw:</span>
+                      <span style={styles.fieldRawValue}>{f.raw === "" ? "∅" : f.raw}</span>
+                    </div>
                   </div>
 
                   {def?.definition ? <div style={styles.fieldDef}>{def.definition}</div> : null}
+                  {required && f.raw === "" ? <div style={styles.missingReq}>Missing required value</div> : null}
 
                   {f.reps.length > 1 ? (
                     <ul style={{ margin: "8px 0 0 18px" }}>

@@ -1,5 +1,5 @@
 {
-  "name": "hl7-adt-viewer",
+  "name": "HL7-v2-viewer",
   "private": true,
   "version": "0.0.0",
   "type": "module",

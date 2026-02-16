@@ -14,7 +14,7 @@ export default function App() {
   return (
     <div style={{ padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-        <h2 style={{ margin: 0 }}>HL7 ADT Viewer Playground</h2>
+        <h2 style={{ margin: 0 }}>HL7 v2 Viewer</h2>
         <div style={{ fontSize: 12, opacity: 0.7 }}>Local test · Pretty / Grid / Raw</div>
       </div>
 
