@@ -1,0 +1,322 @@
+export type Hl7FieldDef = {
+  label: string;
+  definition: string;
+  datatype?: string;
+};
+
+export type Hl7SegmentDef = {
+  segmentLabel: string;
+  fields: Record<number, Hl7FieldDef>;
+};
+
+export const COMMON_DICT: Record<string, Hl7SegmentDef> = {
+  MSH: {
+    segmentLabel: "Message Header",
+    fields: {
+      1: { label: "Field Separator", definition: "Delimiter used to separate fields.", datatype: "ST" },
+      2: { label: "Encoding Characters", definition: "Component/repetition/escape/subcomponent separators.", datatype: "ST" },
+      3: { label: "Sending Application", definition: "Application that sent the message.", datatype: "HD" },
+      4: { label: "Sending Facility", definition: "Facility that sent the message.", datatype: "HD" },
+      5: { label: "Receiving Application", definition: "Intended receiving application.", datatype: "HD" },
+      6: { label: "Receiving Facility", definition: "Intended receiving facility.", datatype: "HD" },
+      7: { label: "Date/Time of Message", definition: "Timestamp message was created.", datatype: "TS" },
+      8: { label: "Security", definition: "Security field for access/validation data when used.", datatype: "ST" },
+      9: { label: "Message Type", definition: "Message code^trigger^structure (e.g., ORU^R01).", datatype: "MSG" },
+      10: { label: "Message Control ID", definition: "Unique identifier for this message instance.", datatype: "ST" },
+      11: { label: "Processing ID", definition: "P=Production, T=Test, D=Debug.", datatype: "PT" },
+      12: { label: "Version ID", definition: "HL7 v2 version used.", datatype: "VID" },
+    },
+  },
+
+  PID: {
+    segmentLabel: "Patient Identification",
+    fields: {
+      1: { label: "Set ID - PID", definition: "Sequence number for PID segments.", datatype: "SI" },
+      2: { label: "Patient ID", definition: "External patient ID (legacy use).", datatype: "CX" },
+      3: { label: "Patient Identifier List", definition: "Identifiers (MRN, etc.) with assigning authority/type.", datatype: "CX" },
+      4: { label: "Alternate Patient ID - PID", definition: "Alternate patient IDs.", datatype: "CX" },
+      5: { label: "Patient Name", definition: "Name (family^given^middle^suffix…).", datatype: "XPN" },
+      6: { label: "Mother's Maiden Name", definition: "Mother's maiden name.", datatype: "XPN" },
+      7: { label: "Date/Time of Birth", definition: "Patient birth date/time.", datatype: "TS" },
+      8: { label: "Administrative Sex", definition: "Patient sex.", datatype: "IS" },
+      9: { label: "Patient Alias", definition: "Alternate patient names.", datatype: "XPN" },
+      10: { label: "Race", definition: "Patient race.", datatype: "CE" },
+      11: { label: "Patient Address", definition: "Address.", datatype: "XAD" },
+      12: { label: "County Code", definition: "County/parish code.", datatype: "IS" },
+      13: { label: "Phone Number - Home", definition: "Home/primary phone.", datatype: "XTN" },
+      14: { label: "Phone Number - Business", definition: "Business phone.", datatype: "XTN" },
+      15: { label: "Primary Language", definition: "Patient primary language.", datatype: "CE" },
+      16: { label: "Marital Status", definition: "Marital status.", datatype: "CE" },
+      17: { label: "Religion", definition: "Patient religion.", datatype: "CE" },
+      18: { label: "Patient Account Number", definition: "Account number.", datatype: "CX" },
+      19: { label: "SSN Number - Patient", definition: "Social security number.", datatype: "ST" },
+      20: { label: "Driver's License Number - Patient", definition: "Driver's license details.", datatype: "DLN" },
+      21: { label: "Mother's Identifier", definition: "Mother's identifier.", datatype: "CX" },
+      22: { label: "Ethnic Group", definition: "Ethnicity.", datatype: "CE" },
+      23: { label: "Birth Place", definition: "Birth place.", datatype: "ST" },
+      24: { label: "Multiple Birth Indicator", definition: "Multiple birth indicator.", datatype: "ID" },
+      25: { label: "Birth Order", definition: "Birth order.", datatype: "NM" },
+      26: { label: "Citizenship", definition: "Citizenship.", datatype: "CE" },
+      27: { label: "Veterans Military Status", definition: "Military/veteran status.", datatype: "CE" },
+      28: { label: "Nationality", definition: "Nationality.", datatype: "CE" },
+      29: { label: "Patient Death Date and Time", definition: "Date/time of death.", datatype: "TS" },
+      30: { label: "Patient Death Indicator", definition: "Death indicator.", datatype: "ID" },
+    },
+  },
+
+  PV1: {
+    segmentLabel: "Patient Visit",
+    fields: {
+      1: { label: "Set ID - PV1", definition: "Sequence number for PV1 segments.", datatype: "SI" },
+      2: { label: "Patient Class", definition: "I/O/E/etc.", datatype: "IS" },
+      3: { label: "Assigned Patient Location", definition: "Point of care^room^bed^facility…", datatype: "PL" },
+      4: { label: "Admission Type", definition: "Admission type.", datatype: "IS" },
+      5: { label: "Preadmit Number", definition: "Preadmit number.", datatype: "CX" },
+      6: { label: "Prior Patient Location", definition: "Prior assigned location.", datatype: "PL" },
+      7: { label: "Attending Doctor", definition: "Attending provider.", datatype: "XCN" },
+      8: { label: "Referring Doctor", definition: "Referring provider.", datatype: "XCN" },
+      9: { label: "Consulting Doctor", definition: "Consulting provider(s).", datatype: "XCN" },
+      10: { label: "Hospital Service", definition: "Hospital service.", datatype: "IS" },
+      11: { label: "Temporary Location", definition: "Temporary location.", datatype: "PL" },
+      12: { label: "Preadmit Test Indicator", definition: "Preadmit test indicator.", datatype: "IS" },
+      13: { label: "Readmission Indicator", definition: "Readmission indicator.", datatype: "IS" },
+      14: { label: "Admit Source", definition: "Admit source.", datatype: "IS" },
+      15: { label: "Ambulatory Status", definition: "Ambulatory status.", datatype: "IS" },
+      16: { label: "VIP Indicator", definition: "VIP indicator.", datatype: "IS" },
+      17: { label: "Admitting Doctor", definition: "Admitting provider.", datatype: "XCN" },
+      18: { label: "Patient Type", definition: "Patient type.", datatype: "IS" },
+      19: { label: "Visit Number", definition: "Encounter/visit identifier.", datatype: "CX" },
+      20: { label: "Financial Class", definition: "Financial class.", datatype: "FC" },
+      21: { label: "Charge Price Indicator", definition: "Charge/price indicator.", datatype: "IS" },
+      22: { label: "Courtesy Code", definition: "Courtesy code.", datatype: "IS" },
+      23: { label: "Credit Rating", definition: "Credit rating.", datatype: "IS" },
+      24: { label: "Contract Code", definition: "Contract code.", datatype: "IS" },
+      25: { label: "Contract Effective Date", definition: "Contract effective date.", datatype: "DT" },
+      26: { label: "Contract Amount", definition: "Contract amount.", datatype: "NM" },
+      27: { label: "Contract Period", definition: "Contract period.", datatype: "NM" },
+      28: { label: "Interest Code", definition: "Interest code.", datatype: "IS" },
+      29: { label: "Transfer to Bad Debt Code", definition: "Bad debt transfer code.", datatype: "IS" },
+      30: { label: "Transfer to Bad Debt Date", definition: "Bad debt transfer date.", datatype: "DT" },
+      31: { label: "Bad Debt Agency Code", definition: "Bad debt agency code.", datatype: "IS" },
+      32: { label: "Bad Debt Transfer Amount", definition: "Bad debt transfer amount.", datatype: "NM" },
+      33: { label: "Bad Debt Recovery Amount", definition: "Bad debt recovery amount.", datatype: "NM" },
+      34: { label: "Delete Account Indicator", definition: "Delete account indicator.", datatype: "IS" },
+      35: { label: "Delete Account Date", definition: "Delete account date.", datatype: "DT" },
+      36: { label: "Discharge Disposition", definition: "Discharge disposition.", datatype: "IS" },
+      37: { label: "Discharged to Location", definition: "Location discharged to.", datatype: "DLD" },
+      38: { label: "Diet Type", definition: "Diet type.", datatype: "CE" },
+      39: { label: "Servicing Facility", definition: "Servicing facility.", datatype: "IS" },
+      40: { label: "Bed Status", definition: "Bed status.", datatype: "IS" },
+      41: { label: "Account Status", definition: "Account status.", datatype: "IS" },
+      42: { label: "Pending Location", definition: "Pending location.", datatype: "PL" },
+      43: { label: "Prior Temporary Location", definition: "Prior temporary location.", datatype: "PL" },
+      44: { label: "Admit Date/Time", definition: "Admit date/time.", datatype: "TS" },
+      45: { label: "Discharge Date/Time", definition: "Discharge date/time.", datatype: "TS" },
+    },
+  },
+
+  NK1: {
+    segmentLabel: "Next of Kin",
+    fields: {
+      1: { label: "Set ID - NK1", definition: "Sequence number.", datatype: "SI" },
+      2: { label: "Name", definition: "Next of kin name.", datatype: "XPN" },
+      3: { label: "Relationship", definition: "Relationship to patient.", datatype: "CE" },
+      4: { label: "Address", definition: "Address for next of kin.", datatype: "XAD" },
+      5: { label: "Phone Number", definition: "Phone number.", datatype: "XTN" },
+      6: { label: "Business Phone Number", definition: "Business phone number.", datatype: "XTN" },
+      7: { label: "Contact Role", definition: "Role of contact.", datatype: "CE" },
+    },
+  },
+
+  PD1: {
+    segmentLabel: "Additional Demographics",
+    fields: {
+      1: { label: "Living Dependency", definition: "Living dependency information.", datatype: "IS" },
+      2: { label: "Living Arrangement", definition: "Living arrangement.", datatype: "IS" },
+      3: { label: "Patient Primary Facility", definition: "Primary care facility.", datatype: "XON" },
+      4: { label: "Patient Primary Care Provider Name & ID", definition: "Primary care provider.", datatype: "XCN" },
+      5: { label: "Student Indicator", definition: "Student indicator.", datatype: "IS" },
+      6: { label: "Handicap", definition: "Handicap information.", datatype: "IS" },
+      7: { label: "Living Will Code", definition: "Living will code.", datatype: "IS" },
+      8: { label: "Organ Donor Code", definition: "Organ donor code.", datatype: "IS" },
+      9: { label: "Separate Bill", definition: "Separate bill indicator.", datatype: "ID" },
+      10: { label: "Duplicate Patient", definition: "Duplicate patient indicator.", datatype: "CX" },
+      11: { label: "Publicity Code", definition: "Publicity code.", datatype: "CE" },
+      12: { label: "Protection Indicator", definition: "Protection indicator.", datatype: "ID" },
+      13: { label: "Protection Indicator Effective Date", definition: "Protection indicator effective date.", datatype: "DT" },
+    },
+  },
+
+  PV2: {
+    segmentLabel: "Visit Additional Info",
+    fields: {
+      1: { label: "Prior Pending Location", definition: "Prior pending location.", datatype: "PL" },
+      2: { label: "Accommodation Code", definition: "Accommodation code.", datatype: "CE" },
+      3: { label: "Admit Reason", definition: "Reason for admit.", datatype: "CE" },
+      4: { label: "Transfer Reason", definition: "Reason for transfer.", datatype: "CE" },
+      5: { label: "Patient Valuables", definition: "Patient valuables.", datatype: "ST" },
+      6: { label: "Patient Valuables Location", definition: "Valuables location.", datatype: "ST" },
+      7: { label: "Visit User Code", definition: "Visit user code.", datatype: "IS" },
+      8: { label: "Expected Admit Date/Time", definition: "Expected admit date/time.", datatype: "TS" },
+      9: { label: "Expected Discharge Date/Time", definition: "Expected discharge date/time.", datatype: "TS" },
+      10: { label: "Estimated Length of Inpatient Stay", definition: "Estimated inpatient stay length.", datatype: "NM" },
+      11: { label: "Actual Length of Inpatient Stay", definition: "Actual inpatient stay length.", datatype: "NM" },
+      12: { label: "Visit Description", definition: "Visit description.", datatype: "ST" },
+      13: { label: "Referral Source Code", definition: "Referral source code.", datatype: "XCN" },
+      14: { label: "Previous Service Date", definition: "Previous service date.", datatype: "DT" },
+      15: { label: "Employment Illness Related Indicator", definition: "Employment illness indicator.", datatype: "IS" },
+      16: { label: "Purge Status Code", definition: "Purge status code.", datatype: "IS" },
+      17: { label: "Purge Status Date", definition: "Purge status date.", datatype: "DT" },
+      18: { label: "Special Program Code", definition: "Special program code.", datatype: "IS" },
+      19: { label: "Retention Indicator", definition: "Retention indicator.", datatype: "IS" },
+      20: { label: "Expected Number of Insurance Plans", definition: "Expected number of plans.", datatype: "NM" },
+      21: { label: "Visit Publicity Code", definition: "Visit publicity code.", datatype: "IS" },
+      22: { label: "Visit Protection Indicator", definition: "Visit protection indicator.", datatype: "ID" },
+      23: { label: "Clinic Organization Name", definition: "Clinic organization name.", datatype: "XON" },
+      24: { label: "Patient Status Code", definition: "Patient status code.", datatype: "IS" },
+      25: { label: "Visit Priority Code", definition: "Visit priority code.", datatype: "IS" },
+      26: { label: "Previous Treatment Date", definition: "Previous treatment date.", datatype: "DT" },
+      27: { label: "Expected Discharge Disposition", definition: "Expected discharge disposition.", datatype: "IS" },
+      28: { label: "Signature on File Date", definition: "Signature on file date.", datatype: "DT" },
+      29: { label: "First Similar Illness Date", definition: "First similar illness date.", datatype: "DT" },
+      30: { label: "Patient Charge Adjustment Code", definition: "Patient charge adjustment code.", datatype: "IS" },
+      31: { label: "Recurring Service Code", definition: "Recurring service code.", datatype: "IS" },
+      32: { label: "Billing Media Code", definition: "Billing media code.", datatype: "IS" },
+    },
+  },
+
+  ORC: {
+    segmentLabel: "Common Order",
+    fields: {
+      1: { label: "Order Control", definition: "Order action code (e.g., NW, RE, CA).", datatype: "ID" },
+      2: { label: "Placer Order Number", definition: "Placer-assigned order id.", datatype: "EI" },
+      3: { label: "Filler Order Number", definition: "Filler-assigned order id.", datatype: "EI" },
+      9: { label: "Date/Time of Transaction", definition: "Transaction timestamp.", datatype: "TS" },
+      12: { label: "Ordering Provider", definition: "Provider who ordered.", datatype: "XCN" },
+    },
+  },
+
+  OBR: {
+    segmentLabel: "Observation Request",
+    fields: {
+      1: { label: "Set ID - OBR", definition: "Sequence number.", datatype: "SI" },
+      4: { label: "Universal Service ID", definition: "Service/test requested.", datatype: "CE" },
+      7: { label: "Observation Date/Time", definition: "Relevant observation time.", datatype: "TS" },
+      16: { label: "Ordering Provider", definition: "Provider who ordered.", datatype: "XCN" },
+      22: { label: "Results Rpt/Status Chng Date/Time", definition: "Results reported time.", datatype: "TS" },
+      25: { label: "Result Status", definition: "Status (F, P, C, etc.).", datatype: "ID" },
+    },
+  },
+
+  OBX: {
+    segmentLabel: "Observation Result",
+    fields: {
+      1: { label: "Set ID - OBX", definition: "Sequence number.", datatype: "SI" },
+      2: { label: "Value Type", definition: "Datatype of OBX-5 (e.g., NM, ST, CE, ED).", datatype: "ID" },
+      3: { label: "Observation Identifier", definition: "What is being measured/observed.", datatype: "CE" },
+      4: { label: "Observation Sub-ID", definition: "Sub-identifier for grouped observations.", datatype: "ST" },
+      5: { label: "Observation Value", definition: "The result value.", datatype: "varies" },
+      6: { label: "Units", definition: "Units for numeric values.", datatype: "CE" },
+      7: { label: "Reference Range", definition: "Reference range.", datatype: "ST" },
+      8: { label: "Abnormal Flags", definition: "Abnormal flag(s).", datatype: "IS" },
+      9: { label: "Probability", definition: "Probability for probabilistic results.", datatype: "NM" },
+      10: { label: "Nature of Abnormal Test", definition: "Nature of abnormality.", datatype: "ID" },
+      11: { label: "Observation Result Status", definition: "Result status.", datatype: "ID" },
+      12: { label: "Effective Date of Reference Range", definition: "Date reference range became effective.", datatype: "TS" },
+      13: { label: "User Defined Access Checks", definition: "Access/security checks for result.", datatype: "ST" },
+      14: { label: "Date/Time of the Observation", definition: "Observation timestamp.", datatype: "TS" },
+      15: { label: "Producer's ID", definition: "Producer/lab identifier.", datatype: "CE" },
+      16: { label: "Responsible Observer", definition: "Person responsible for observation.", datatype: "XCN" },
+      17: { label: "Observation Method", definition: "Method used for observation.", datatype: "CE" },
+      18: { label: "Equipment Instance Identifier", definition: "Equipment identifiers.", datatype: "EI" },
+      19: { label: "Date/Time of the Analysis", definition: "When analysis was performed.", datatype: "TS" },
+      20: { label: "Observation Site", definition: "Anatomic/body site.", datatype: "CE" },
+      21: { label: "Observation Instance Identifier", definition: "Unique identifier for this observation instance.", datatype: "EI" },
+      22: { label: "Mood Code", definition: "Mood code for the observation act.", datatype: "CNE" },
+      23: { label: "Performing Organization Name", definition: "Name of performing organization.", datatype: "XON" },
+      24: { label: "Performing Organization Address", definition: "Address of performing organization.", datatype: "XAD" },
+      25: { label: "Performing Organization Medical Director", definition: "Medical director/provider.", datatype: "XCN" },
+    },
+  },
+
+  NTE: {
+    segmentLabel: "Notes and Comments",
+    fields: {
+      1: { label: "Set ID - NTE", definition: "Sequence number.", datatype: "SI" },
+      3: { label: "Comment", definition: "Free-text note/comment.", datatype: "FT" },
+    },
+  },
+
+  TXA: {
+    segmentLabel: "Document Notification",
+    fields: {
+      2: { label: "Document Type", definition: "Type of document.", datatype: "IS" },
+      12: { label: "Activity Date/Time", definition: "Document activity timestamp.", datatype: "TS" },
+      13: { label: "Primary Activity Provider Code/Name", definition: "Provider associated with document activity.", datatype: "XCN" },
+    },
+  },
+
+  RXA: {
+    segmentLabel: "Pharmacy/Treatment Administration",
+    fields: {
+      3: { label: "Date/Time Start of Administration", definition: "Administration start time.", datatype: "TS" },
+      5: { label: "Administered Code", definition: "Drug/vaccine administered.", datatype: "CE" },
+      6: { label: "Administered Amount", definition: "Amount administered.", datatype: "NM" },
+      7: { label: "Administered Units", definition: "Units for amount.", datatype: "CE" },
+      9: { label: "Administration Notes", definition: "Notes/remarks.", datatype: "CE" },
+    },
+  },
+
+  RXR: {
+    segmentLabel: "Pharmacy/Treatment Route",
+    fields: {
+      1: { label: "Route", definition: "Route of administration.", datatype: "CE" },
+      2: { label: "Administration Site", definition: "Body site.", datatype: "CE" },
+    },
+  },
+
+  RXE: {
+    segmentLabel: "Pharmacy/Treatment Encoded Order",
+    fields: {
+      2: { label: "Give Code", definition: "Drug ordered.", datatype: "CE" },
+      3: { label: "Give Amount - Minimum", definition: "Dose amount.", datatype: "NM" },
+      5: { label: "Give Units", definition: "Dose units.", datatype: "CE" },
+      21: { label: "Pharmacy/Treatment Supplier's Verbatim", definition: "Free-text drug description.", datatype: "ST" },
+    },
+  },
+
+  TQ1: {
+    segmentLabel: "Timing/Quantity",
+    fields: {
+      7: { label: "Start Date/Time", definition: "When timing starts.", datatype: "TS" },
+      8: { label: "End Date/Time", definition: "When timing ends.", datatype: "TS" },
+      9: { label: "Priority", definition: "Priority.", datatype: "CE" },
+    },
+  },
+
+  PR1: {
+    segmentLabel: "Procedures",
+    fields: {
+      1: { label: "Set ID - PR1", definition: "Sequence number.", datatype: "SI" },
+      3: { label: "Procedure Code", definition: "Procedure identifier.", datatype: "CE" },
+      5: { label: "Procedure Date/Time", definition: "When the procedure occurred.", datatype: "TS" },
+      11: { label: "Surgeon", definition: "Surgeon/provider.", datatype: "XCN" },
+    },
+  },
+
+  SPM: {
+    segmentLabel: "Specimen",
+    fields: {
+      1: { label: "Set ID - SPM", definition: "Sequence number for SPM segments.", datatype: "SI" },
+      2: { label: "Specimen ID", definition: "Local/specimen identifier.", datatype: "EIP" },
+      3: { label: "Specimen Parent IDs", definition: "Parent specimen identifiers.", datatype: "EIP" },
+      4: { label: "Specimen Type", definition: "Type of specimen (e.g., blood, urine).", datatype: "CWE" },
+      8: { label: "Specimen Source Site", definition: "Anatomic source site/body location.", datatype: "CWE" },
+      11: { label: "Specimen Role", definition: "Role of specimen in testing.", datatype: "CWE" },
+      17: { label: "Specimen Collection Date/Time", definition: "When specimen was collected.", datatype: "DR" },
+      18: { label: "Specimen Received Date/Time", definition: "When specimen was received.", datatype: "TS" },
+      24: { label: "Specimen Condition", definition: "Condition/quality of specimen.", datatype: "CWE" },
+      27: { label: "Specimen Reject Reason", definition: "Reason specimen was rejected.", datatype: "CWE" },
+    },
+  },
+};
