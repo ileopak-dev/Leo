@@ -22,4 +22,4 @@ export type PatientInsightsDTO = {
 
 export type TimelineKind = PatientInsightsDTO["timeline"][number]["kind"];
 
-export type Tab = "snapshot" | "timeline" | "encounters" | "problems" | "procedures" | "vitals" | "labs" | "meds" | "immunizations" | "allergies" | "social" | "mental" | "docs";
+export type Tab = "snapshot" | "timeline" | "encounters" | "problems" | "procedures" | "vitals" | "labs" | "meds" | "immunizations" | "allergies" | "social" | "mental" | "phq9" | "docs";

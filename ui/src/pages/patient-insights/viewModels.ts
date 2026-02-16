@@ -14,6 +14,12 @@ export type LoadedPatientBundle = {
 export type AgeTier = "u21" | "u60" | "o60" | "unknown";
 export type SexTone = "male" | "female" | "other";
 
+function isPhq9Observation(obs: any): boolean {
+  if (!obs || obs.resourceType !== "Observation") return false;
+  const codings = Array.isArray(obs?.code?.coding) ? obs.code.coding : [];
+  return codings.some((c: any) => String(c?.code ?? "").trim() === "44261-6");
+}
+
 export function patientIdentityKey(dto: PatientInsightsDTO): string {
   const id = String(dto?.patient?.id ?? "").trim();
   if (id) return `id:${id}`;
@@ -152,8 +158,28 @@ export function buildLocationChart(dto: PatientInsightsDTO | null) {
 export function buildNavCounts(dto: PatientInsightsDTO | null): Record<Tab, number> {
   const snapshot = dto?.snapshot;
   const timeline = dto?.timeline ?? [];
+  const all = Object.values(dto?.resources ?? {}) as any[];
+  const phq9Count = all.filter((r) => isPhq9Observation(r)).length;
+  const mentalCount = (snapshot?.mentalStatus ?? []).filter((m) => {
+    const ev = m?.evidence?.[0];
+    const key = ev ? `${ev.resourceType}/${ev.id}` : "";
+    const obs: any = key ? dto?.resources?.[key] : null;
+    const label = String(m?.label ?? "").toLowerCase();
+    return !isPhq9Observation(obs) && !label.includes("phq-9") && !label.includes("phq 9");
+  }).length;
+  const synopsisTotal =
+    (snapshot?.problems?.length ?? 0) +
+    (snapshot?.procedures?.length ?? 0) +
+    (snapshot?.vitals?.length ?? 0) +
+    (snapshot?.labs?.length ?? 0) +
+    (snapshot?.meds?.length ?? 0) +
+    (snapshot?.immunizations?.length ?? 0) +
+    (snapshot?.allergies?.length ?? 0) +
+    (snapshot?.socialHistory?.length ?? 0) +
+    mentalCount +
+    phq9Count;
   return {
-    snapshot: 0,
+    snapshot: synopsisTotal,
     timeline: timeline.length,
     encounters: timeline.filter((e) => e.kind === "encounter").length,
     problems: snapshot?.problems?.length ?? 0,
@@ -164,25 +190,38 @@ export function buildNavCounts(dto: PatientInsightsDTO | null): Record<Tab, numb
     immunizations: snapshot?.immunizations?.length ?? 0,
     allergies: snapshot?.allergies?.length ?? 0,
     social: snapshot?.socialHistory?.length ?? 0,
-    mental: snapshot?.mentalStatus?.length ?? 0,
+    mental: mentalCount,
+    phq9: phq9Count,
     docs: timeline.filter((e) => e.kind === "document").length,
   };
 }
 
 export function buildPhq9Rows(dto: PatientInsightsDTO | null) {
   if (!dto?.resources) return [] as Array<{ row: any; score?: number; severity: string; abnormal: boolean }>;
-  const rows = (dto.snapshot?.mentalStatus ?? []).filter((m) => {
-    const label = String(m?.label ?? "").toLowerCase();
-    if (label.includes("phq-9") || label.includes("phq 9")) return true;
-    const ev = m?.evidence?.[0];
-    const key = ev ? `${ev.resourceType}/${ev.id}` : "";
-    const obs: any = key ? dto.resources?.[key] : null;
-    return String(obs?.code?.coding?.[0]?.code ?? "") === "44261-6";
-  });
+  const rows = (Object.values(dto.resources) as any[])
+    .filter((r) => isPhq9Observation(r))
+    .map((obs) => {
+      const label =
+        String(obs?.code?.text ?? "").trim() ||
+        String(obs?.code?.coding?.[0]?.display ?? "").trim() ||
+        "PHQ-9 total score";
+      const latest =
+        obs?.valueQuantity?.value != null
+          ? `${obs.valueQuantity.value}${obs?.valueQuantity?.unit ? ` ${obs.valueQuantity.unit}` : ""}`
+          : String(obs?.valueString ?? obs?.valueCodeableConcept?.text ?? "");
+      const at =
+        String(obs?.effectiveDateTime ?? obs?.issued ?? obs?.meta?.lastUpdated ?? "").trim() || undefined;
+      return {
+        label,
+        latest,
+        at,
+        evidence: [{ resourceType: "Observation", id: String(obs.id) }],
+        obs,
+      };
+    });
+
   return rows.map((row) => {
-    const ev = row?.evidence?.[0];
-    const key = ev ? `${ev.resourceType}/${ev.id}` : "";
-    const obs: any = key ? dto.resources?.[key] : null;
+    const obs: any = row.obs;
     const scoreRaw = obs?.valueQuantity?.value;
     const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
     let severity = "Unknown";
@@ -196,6 +235,15 @@ export function buildPhq9Rows(dto: PatientInsightsDTO | null) {
       severity =
         String(obs?.interpretation?.[0]?.text ?? obs?.interpretation?.[0]?.coding?.[0]?.display ?? "Unknown");
     }
-    return { row, score: Number.isFinite(score) ? score : undefined, severity, abnormal: Number.isFinite(score) ? score >= 10 : /moderate|severe/i.test(severity) };
+    return {
+      row,
+      score: Number.isFinite(score) ? score : undefined,
+      severity,
+      abnormal: Number.isFinite(score) ? score >= 10 : /moderate|severe/i.test(severity)
+    };
+  }).sort((a, b) => {
+    const da = Date.parse(String(a.row?.at ?? ""));
+    const db = Date.parse(String(b.row?.at ?? ""));
+    return (Number.isNaN(db) ? 0 : db) - (Number.isNaN(da) ? 0 : da);
   });
 }

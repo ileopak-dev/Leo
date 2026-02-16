@@ -14,6 +14,7 @@ export const nav: Array<{ key: Tab; label: string; icon: any }> = [
   { key: "allergies", label: "Allergies", icon: AlertTriangle },
   { key: "social", label: "Social History", icon: FileText },
   { key: "mental", label: "Mental Status", icon: Activity },
+  { key: "phq9", label: "PHQ-9", icon: FileText },
 ];
 
 export const timelineKindMeta: Array<{ kind: TimelineKind; label: string; icon: any }> = [

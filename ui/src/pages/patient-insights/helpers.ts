@@ -1,5 +1,104 @@
 import type { EvidenceRef, PatientInsightsDTO } from "./types";
 
+type VitalLoincRange = {
+  low: number;
+  high: number;
+  unit?: string;
+};
+
+const VITAL_LOINC_FALLBACK_RANGES: Record<string, VitalLoincRange> = {
+  // Systolic blood pressure
+  "8480-6": { low: 90, high: 120, unit: "mm[Hg]" },
+  // Diastolic blood pressure
+  "8462-4": { low: 60, high: 80, unit: "mm[Hg]" },
+  // Heart rate
+  "8867-4": { low: 60, high: 100, unit: "/min" },
+  // Respiratory rate
+  "9279-1": { low: 12, high: 20, unit: "/min" },
+  // Body temperature
+  "8310-5": { low: 36.1, high: 37.2, unit: "Cel" },
+  // Oxygen saturation by pulse oximetry
+  "59408-5": { low: 95, high: 100, unit: "%" },
+  // Oxygen saturation in blood
+  "2708-6": { low: 95, high: 100, unit: "%" },
+  // Body mass index
+  "39156-5": { low: 18.5, high: 24.9, unit: "kg/m2" },
+};
+
+function loincCodesOf(codeableConcept: any): string[] {
+  const codings = Array.isArray(codeableConcept?.coding) ? codeableConcept.coding : [];
+  const out: string[] = [];
+  for (const c of codings) {
+    const system = String(c?.system ?? "").toLowerCase();
+    const code = String(c?.code ?? "").trim();
+    if (!code) continue;
+    if (!system || system.includes("loinc")) out.push(code);
+  }
+  return out;
+}
+
+function isVitalObservation(observation: any): boolean {
+  const categories = Array.isArray(observation?.category) ? observation.category : [];
+  for (const cat of categories) {
+    const codings = Array.isArray(cat?.coding) ? cat.coding : [];
+    if (codings.some((c: any) => String(c?.code ?? "").toLowerCase() === "vital-signs")) return true;
+  }
+  return false;
+}
+
+function hasMappedVitalLoinc(observation: any): boolean {
+  const rootCodes = loincCodesOf(observation?.code);
+  if (rootCodes.some((c) => !!VITAL_LOINC_FALLBACK_RANGES[c])) return true;
+  const components = Array.isArray(observation?.component) ? observation.component : [];
+  for (const comp of components) {
+    const compCodes = loincCodesOf(comp?.code);
+    if (compCodes.some((c) => !!VITAL_LOINC_FALLBACK_RANGES[c])) return true;
+  }
+  return false;
+}
+
+function normalizeUnit(unit?: string): string {
+  return String(unit ?? "").trim().toLowerCase();
+}
+
+function toUnitForRange(value: number, fromUnit: string, targetUnit?: string): number | null {
+  if (!Number.isFinite(value)) return null;
+  if (!targetUnit) return value;
+  const from = normalizeUnit(fromUnit);
+  const target = normalizeUnit(targetUnit);
+  if (!target) return value;
+  if (from === target) return value;
+
+  // Temperature conversion for LOINC 8310-5 fallback.
+  if (target === "cel") {
+    if (from === "[degf]" || from === "degf" || from === "f" || from === "fahrenheit") {
+      return ((value - 32) * 5) / 9;
+    }
+  }
+  if (target === "[degf]" || target === "degf") {
+    if (from === "cel" || from === "c" || from === "celsius") {
+      return (value * 9) / 5 + 32;
+    }
+  }
+  return null;
+}
+
+function rangeTag(value: number, low?: number, high?: number): "Low" | "High" | undefined {
+  if (Number.isFinite(value) && Number.isFinite(low) && value < (low as number)) return "Low";
+  if (Number.isFinite(value) && Number.isFinite(high) && value > (high as number)) return "High";
+  return undefined;
+}
+
+function formatRange(low?: number, high?: number, unit?: string): string | undefined {
+  const hasLow = Number.isFinite(low);
+  const hasHigh = Number.isFinite(high);
+  const u = String(unit ?? "").trim();
+  if (!hasLow && !hasHigh) return undefined;
+  if (hasLow && hasHigh) return `${low}-${high}${u ? ` ${u}` : ""}`;
+  if (hasLow) return `>= ${low}${u ? ` ${u}` : ""}`;
+  return `<= ${high}${u ? ` ${u}` : ""}`;
+}
+
 export function keyOf(ev?: EvidenceRef) {
   if (!ev) return null;
   return `${ev.resourceType}/${ev.id}`;
@@ -23,6 +122,16 @@ export function fmtAt(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleDateString();
+}
+
+export function fmtUsDob(value?: string): string {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "n/a") return raw || "n/a";
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return `${m[2]}/${m[3]}/${m[1]}`;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toLocaleDateString("en-US");
 }
 
 export function monthKey(value: string): string {
@@ -52,7 +161,7 @@ export function encounterToneClass(encounter: any): string {
   if (code.includes("EMER")) return "emer";
   if (code.includes("IMP") || code.includes("INPAT")) return "inp";
   if (code.includes("OBS")) return "obs";
-  if (code.includes("AMB") || code.includes("OUT")) return "amb";
+  if (code.includes("AMB") || code.includes("OUT") || code === "OP") return "amb";
   return "other";
 }
 
@@ -231,13 +340,53 @@ export function metaSourceOf(evidence: EvidenceRef[] | undefined, resources?: Re
   return undefined;
 }
 
+export function clinicalDateOf(
+  evidence: EvidenceRef[] | undefined,
+  resources?: Record<string, any>,
+  fallbackDate?: string
+): string | undefined {
+  const fallback = typeof fallbackDate === "string" && fallbackDate.trim() ? fallbackDate.trim() : undefined;
+  if (!evidence || !resources) return fallback;
+
+  for (const ev of evidence) {
+    const key = `${ev.resourceType}/${ev.id}`;
+    const r = resources[key];
+    if (!r) continue;
+
+    const candidates = [
+      r?.effectiveDateTime,
+      r?.effectivePeriod?.start,
+      r?.issued,
+      r?.period?.start,
+      r?.occurrenceDateTime,
+      r?.occurrencePeriod?.start,
+      r?.performedDateTime,
+      r?.performedPeriod?.start,
+      r?.recordedDate,
+      r?.authoredOn,
+      r?.date,
+      r?.onsetDateTime,
+      r?.onsetPeriod?.start,
+      r?.abatementDateTime,
+      r?.meta?.lastUpdated,
+    ];
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) return c.trim();
+    }
+  }
+
+  return fallback;
+}
+
 export function withSource(text: string | undefined, source: string | undefined): string {
   return [text, source ? `Source: ${source}` : ""].filter(Boolean).join(" • ");
 }
 
-export function sourceLine(evidence: EvidenceRef[] | undefined, resources?: Record<string, any>): string {
+export function sourceLine(evidence: EvidenceRef[] | undefined, resources?: Record<string, any>, fallbackDate?: string): string {
   const source = metaSourceOf(evidence, resources);
-  return source ? `Source: ${source}` : "";
+  const date = clinicalDateOf(evidence, resources, fallbackDate);
+  const dateText = `Date: ${date ? fmtAt(date) : "n/a"}`;
+  return source ? `${dateText}\nSource: ${source}` : dateText;
 }
 
 export function quantityValueOf(evidence: EvidenceRef[] | undefined, resources?: Record<string, any>): string | undefined {
@@ -347,8 +496,102 @@ export function observationAbnormalTag(evidence: EvidenceRef[] | undefined, reso
     const value = Number(r?.valueQuantity?.value);
     const low = Number(r?.referenceRange?.[0]?.low?.value);
     const high = Number(r?.referenceRange?.[0]?.high?.value);
-    if (Number.isFinite(value) && Number.isFinite(low) && value < low) return "Low";
-    if (Number.isFinite(value) && Number.isFinite(high) && value > high) return "High";
+    const byObservationRange = rangeTag(value, low, high);
+    if (byObservationRange) return byObservationRange;
+
+    // Fallback to canonical LOINC ranges for vital signs when reference ranges are missing.
+    const useLoincFallback = isVitalObservation(r) || hasMappedVitalLoinc(r);
+    if (!useLoincFallback) continue;
+
+    const hits: Array<"Low" | "High"> = [];
+
+    const rootCodes = loincCodesOf(r?.code);
+    const rootValue = Number(r?.valueQuantity?.value);
+    const rootUnit = String(r?.valueQuantity?.code ?? r?.valueQuantity?.unit ?? "");
+    if (Number.isFinite(rootValue)) {
+      for (const code of rootCodes) {
+        const rr = VITAL_LOINC_FALLBACK_RANGES[code];
+        if (!rr) continue;
+        const converted = toUnitForRange(rootValue, rootUnit, rr.unit);
+        if (converted == null) continue;
+        const tag = rangeTag(converted, rr.low, rr.high);
+        if (tag) hits.push(tag);
+      }
+    }
+
+    const components = Array.isArray(r?.component) ? r.component : [];
+    for (const comp of components) {
+      const compCodes = loincCodesOf(comp?.code);
+      const compValue = Number(comp?.valueQuantity?.value);
+      const compUnit = String(comp?.valueQuantity?.code ?? comp?.valueQuantity?.unit ?? "");
+      if (!Number.isFinite(compValue)) continue;
+      for (const code of compCodes) {
+        const rr = VITAL_LOINC_FALLBACK_RANGES[code];
+        if (!rr) continue;
+        const converted = toUnitForRange(compValue, compUnit, rr.unit);
+        if (converted == null) continue;
+        const tag = rangeTag(converted, rr.low, rr.high);
+        if (tag) hits.push(tag);
+      }
+    }
+
+    if (hits.includes("High") && hits.includes("Low")) return "Abnormal";
+    if (hits.includes("High")) return "High";
+    if (hits.includes("Low")) return "Low";
+  }
+  return undefined;
+}
+
+export function observationExpectedRange(evidence: EvidenceRef[] | undefined, resources?: Record<string, any>): string | undefined {
+  if (!evidence || !resources) return undefined;
+  for (const ev of evidence) {
+    const key = `${ev.resourceType}/${ev.id}`;
+    const r = resources[key];
+    if (!r || r.resourceType !== "Observation") continue;
+
+    const rrLow = Number(r?.referenceRange?.[0]?.low?.value);
+    const rrHigh = Number(r?.referenceRange?.[0]?.high?.value);
+    const rrUnit = String(r?.referenceRange?.[0]?.low?.unit ?? r?.referenceRange?.[0]?.high?.unit ?? r?.valueQuantity?.unit ?? r?.valueQuantity?.code ?? "");
+    const byReferenceRange = formatRange(rrLow, rrHigh, rrUnit);
+    if (byReferenceRange) return byReferenceRange;
+
+    const useLoincFallback = isVitalObservation(r) || hasMappedVitalLoinc(r);
+    if (!useLoincFallback) continue;
+
+    const parts: string[] = [];
+    const seen = new Set<string>();
+
+    const rootCodes = loincCodesOf(r?.code);
+    for (const code of rootCodes) {
+      const fr = VITAL_LOINC_FALLBACK_RANGES[code];
+      if (!fr) continue;
+      const rangeText = formatRange(fr.low, fr.high, fr.unit);
+      if (!rangeText) continue;
+      const item = rangeText;
+      if (!seen.has(item)) {
+        seen.add(item);
+        parts.push(item);
+      }
+    }
+
+    const components = Array.isArray(r?.component) ? r.component : [];
+    for (const comp of components) {
+      const compCodes = loincCodesOf(comp?.code);
+      for (const code of compCodes) {
+        const fr = VITAL_LOINC_FALLBACK_RANGES[code];
+        if (!fr) continue;
+        const label = String(comp?.code?.text ?? comp?.code?.coding?.[0]?.display ?? code).trim();
+        const rangeText = formatRange(fr.low, fr.high, fr.unit);
+        if (!rangeText) continue;
+        const item = `${label}: ${rangeText}`;
+        if (!seen.has(item)) {
+          seen.add(item);
+          parts.push(item);
+        }
+      }
+    }
+
+    if (parts.length > 0) return parts.join(" • ");
   }
   return undefined;
 }

@@ -4,11 +4,13 @@ import { nav, timelineKindMeta } from "./patient-insights/config";
 import {
   abnormalValueOf,
   allergyDetailsOf,
+  clinicalDateOf,
   clinicalItemValue,
   dateScore,
   encounterDetailsOf,
   encounterToneClass,
   fmtAt,
+  fmtUsDob,
   fmtMonthKey,
   isAbnormalEvent,
   isChronicMedication,
@@ -19,11 +21,14 @@ import {
   medicationDosageOf,
   medicationPatientInstructionOf,
   monthKey,
+  metaSourceOf,
   observationAbnormalTag,
+  observationExpectedRange,
   observationValueStringOf,
   parseNumericValue,
   postJSON,
   sourceLine,
+  statusOf,
   statusLine,
 } from "./patient-insights/helpers";
 import type { EvidenceRef, PatientInsightsDTO, Tab, TimelineKind } from "./patient-insights/types";
@@ -40,14 +45,30 @@ import {
   sexToneFromSex,
   type LoadedPatientBundle,
 } from "./patient-insights/viewModels";
+import {
+  buildBannerExpandedMap,
+  buildSelectedBannerEvidenceRows,
+  insightBannerKey,
+} from "./patient-insights/insightViewModels";
+import { buildAbnormalNavCounts } from "./patient-insights/navReview";
+import { PatientHeader } from "./patient-insights/components/PatientHeader";
+import { Phq9DetailPanel } from "./patient-insights/components/Phq9DetailPanel";
 
 export function PatientInsightsPage() {
   const [tab, setTab] = useState<Tab>("snapshot");
   const [dto, setDto] = useState<PatientInsightsDTO | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedPhq9Ref, setSelectedPhq9Ref] = useState<string>("");
+  const [selectedPhq9TabRef, setSelectedPhq9TabRef] = useState<string>("");
+  const [inspectorDock, setInspectorDock] = useState<"right" | "bottom" | "hidden">(() => {
+    if (typeof window === "undefined") return "right";
+    const saved = window.localStorage.getItem("pi_inspector_dock");
+    return saved === "right" || saved === "bottom" || saved === "hidden" ? saved : "right";
+  });
   const [selectedBanner, setSelectedBanner] = useState<PatientInsightsDTO["banners"][number] | null>(null);
   const [selectedEncounterKey, setSelectedEncounterKey] = useState<string>("");
+  const [showRawEncounterJson, setShowRawEncounterJson] = useState(false);
   const [loadedBundles, setLoadedBundles] = useState<LoadedPatientBundle[]>([]);
   const [activeBundleEntryKey, setActiveBundleEntryKey] = useState<string>("");
 
@@ -75,6 +96,9 @@ export function PatientInsightsPage() {
   }, [dto]);
   const encounterEvents = useMemo(() => timelineEvents.filter((e) => e.kind === "encounter"), [timelineEvents]);
   const navCounts = useMemo<Record<Tab, number>>(() => buildNavCounts(dto), [dto]);
+  const organizationVisitedCount = orgChart.items.length;
+  const locationVisitedCount = locationChart.items.length;
+  const nextOfKinCount = nextOfKinChart.items.length;
   const timelineColumns = useMemo(() => {
     const groups = new Map<string, typeof encounterEvents>();
     for (const event of encounterEvents) {
@@ -191,64 +215,211 @@ export function PatientInsightsPage() {
       .sort((a, b) => b.points.length - a.points.length);
   }, [dto, selectedEncounterRelatedEvents]);
   const phq9Rows = useMemo(() => buildPhq9Rows(dto), [dto]);
+  const selectedPhq9Response = useMemo(() => {
+    if (!selectedPhq9Ref) return null;
+    const r: any = dto?.resources?.[selectedPhq9Ref];
+    return r?.resourceType === "QuestionnaireResponse" ? r : null;
+  }, [dto, selectedPhq9Ref]);
+  const selectedPhq9Items = useMemo(() => {
+    const canonical = [
+      { linkId: "q1", text: "Little interest or pleasure in doing things" },
+      { linkId: "q2", text: "Feeling down, depressed, or hopeless" },
+      { linkId: "q3", text: "Trouble falling or staying asleep, or sleeping too much" },
+      { linkId: "q4", text: "Feeling tired or having little energy" },
+      { linkId: "q5", text: "Poor appetite or overeating" },
+      { linkId: "q6", text: "Feeling bad about yourself - or that you are a failure or have let yourself or your family down" },
+      { linkId: "q7", text: "Trouble concentrating on things, such as reading the newspaper or watching television" },
+      { linkId: "q8", text: "Moving or speaking so slowly that other people could have noticed. Or the opposite - being so fidgety or restless that you have been moving around a lot more than usual" },
+      { linkId: "q9", text: "Thoughts that you would be better off dead, or of hurting yourself in some way" },
+    ];
+    const byLink = new Map<string, any>();
+    const walk = (items: any[]) => {
+      for (const it of items) {
+        const link = String(it?.linkId ?? "").trim();
+        if (link) byLink.set(link, it);
+        if (Array.isArray(it?.item) && it.item.length > 0) walk(it.item);
+      }
+    };
+    if (Array.isArray(selectedPhq9Response?.item)) walk(selectedPhq9Response.item);
+
+    return canonical.map((q) => {
+      const it = byLink.get(q.linkId);
+      const a = Array.isArray(it?.answer) ? it.answer[0] : null;
+      const codeRaw = a?.valueCoding?.code ?? a?.valueInteger ?? a?.valueDecimal;
+      const codeNum = Number(codeRaw);
+      const score = Number.isFinite(codeNum) ? codeNum : undefined;
+      const answerText =
+        String(a?.valueCoding?.display ?? a?.valueString ?? "").trim() ||
+        (score != null ? String(score) : "No answer");
+      return {
+        linkId: q.linkId,
+        question: String(it?.text ?? q.text),
+        answer: answerText,
+        score,
+      };
+    });
+  }, [selectedPhq9Response]);
+  const selectedPhq9Total = useMemo(() => {
+    if (!selectedPhq9Ref) return undefined;
+    const selectedObs: any = dto?.resources?.[selectedPhq9Ref];
+    if (selectedObs?.resourceType === "Observation") {
+      const raw = selectedObs?.valueQuantity?.value ?? selectedObs?.valueInteger ?? selectedObs?.valueDecimal;
+      const n = Number(raw);
+      if (Number.isFinite(n)) return n;
+    }
+    const fromAnswers = selectedPhq9Items.reduce((sum, q) => {
+      const n = Number(q.score);
+      return Number.isFinite(n) ? sum + n : sum;
+    }, 0);
+    return fromAnswers > 0 ? fromAnswers : undefined;
+  }, [dto, selectedPhq9Items, selectedPhq9Ref]);
+
+  function resolvePhq9LinkedResourceKey(row: any): string {
+    const obsKey = keyOf(row?.evidence?.[0]) ?? "";
+    const obs: any = obsKey ? dto?.resources?.[obsKey] : null;
+    const linkCandidates = [
+      ...(Array.isArray(obs?.derivedFrom) ? obs.derivedFrom : []),
+      ...(Array.isArray(obs?.hasMember) ? obs.hasMember : []),
+      ...(Array.isArray(obs?.focus) ? obs.focus : []),
+      ...(Array.isArray(obs?.basedOn) ? obs.basedOn : []),
+    ]
+      .map((x: any) => String(x?.reference ?? "").trim())
+      .filter(Boolean);
+    const qr = linkCandidates.find((ref: string) => ref.startsWith("QuestionnaireResponse/") && !!dto?.resources?.[ref]);
+    if (qr) return qr;
+    const linked = linkCandidates.find((ref: string) => !!dto?.resources?.[ref]);
+    return linked ?? obsKey;
+  }
+
+  function selectPhq9LinkedResource(row: any, context: "snapshot" | "phq9" = "snapshot") {
+    const key = resolvePhq9LinkedResourceKey(row);
+    setSelected(key);
+    setSelectedPhq9Ref(key);
+    if (context === "phq9") setSelectedPhq9TabRef(key);
+  }
+
+  const mentalRows = useMemo(() => {
+    const items = dto?.snapshot?.mentalStatus ?? [];
+    return items.filter((m) => {
+      const label = String(m?.label ?? "").toLowerCase();
+      if (label.includes("phq-9") || label.includes("phq 9")) return false;
+      const ev = m?.evidence?.[0];
+      const key = ev ? `${ev.resourceType}/${ev.id}` : "";
+      const obs: any = key ? dto?.resources?.[key] : null;
+      const codings = Array.isArray(obs?.code?.coding) ? obs.code.coding : [];
+      return !codings.some((c: any) => String(c?.code ?? "").trim() === "44261-6");
+    });
+  }, [dto]);
+  const snapshotProblems = dto?.snapshot?.problems ?? [];
+  const snapshotMeds = dto?.snapshot?.meds ?? [];
+  const snapshotAllergies = dto?.snapshot?.allergies ?? [];
+  const snapshotProcedures = dto?.snapshot?.procedures ?? [];
+  const snapshotVitals = dto?.snapshot?.vitals ?? [];
+  const snapshotLabs = dto?.snapshot?.labs ?? [];
+  const abnormalVitalsBanner = useMemo<PatientInsightsDTO["banners"][number] | null>(() => {
+    if (!dto) return null;
+    const rows = snapshotVitals
+      .map((v) => {
+        const tag = observationAbnormalTag(v.evidence, dto.resources);
+        const ev = v.evidence?.[0];
+        const key = ev ? `${ev.resourceType}/${ev.id}` : "";
+        const at = clinicalDateOf(v.evidence, dto.resources);
+        return { v, tag, key, at };
+      })
+      .filter((x) => !!x.tag && !!x.key);
+    if (rows.length === 0) return null;
+
+    const seen = new Set<string>();
+    const evidence = rows
+      .map((x) => x.v.evidence?.[0])
+      .filter((ev): ev is NonNullable<typeof ev> => {
+        if (!ev) return false;
+        const k = `${ev.resourceType}/${ev.id}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    const labels = rows.map((x) => `${x.v.label} (${x.tag})`);
+    const dates = rows.map((x) => x.at).filter(Boolean) as string[];
+    return {
+      severity: "high",
+      title: `Abnormal vitals: ${rows.length}`,
+      detail: Array.from(new Set(labels)).slice(0, 6).join(" • "),
+      occurredAt: Array.from(new Set(dates)).map((d) => fmtAt(d)).join(" • "),
+      evidence,
+    };
+  }, [dto, snapshotVitals]);
+  const phq9ElevatedBanner = useMemo<PatientInsightsDTO["banners"][number] | null>(() => {
+    if (!dto) return null;
+    const elevated = phq9Rows.filter((r) => typeof r.score === "number" && r.score >= 10);
+    if (elevated.length === 0) return null;
+
+    const seen = new Set<string>();
+    const evidence = elevated
+      .map((r) => r.row?.evidence?.[0])
+      .filter((ev): ev is NonNullable<typeof ev> => {
+        if (!ev?.resourceType || !ev?.id) return false;
+        const k = `${ev.resourceType}/${ev.id}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+
+    const details = elevated
+      .map((r) => `${r.score}${r.severity ? ` (${r.severity})` : ""}`)
+      .slice(0, 8)
+      .join(" • ");
+    const dates = elevated
+      .map((r) => clinicalDateOf(r.row?.evidence, dto.resources, r.row?.at))
+      .filter(Boolean)
+      .map((d) => fmtAt(String(d)));
+
+    return {
+      severity: "high",
+      title: `PHQ-9 score 10+: ${elevated.length}`,
+      detail: details,
+      occurredAt: Array.from(new Set(dates)).join(" • "),
+      evidence,
+    };
+  }, [dto, phq9Rows]);
+  const displayBanners = useMemo(() => {
+    let out = dto?.banners ?? [];
+    if (abnormalVitalsBanner) {
+      const hasVitals = out.some((b) => /^abnormal vitals:/i.test(String(b.title ?? "")));
+      if (!hasVitals) out = [abnormalVitalsBanner, ...out];
+    }
+    if (phq9ElevatedBanner) {
+      const hasPhq9 = out.some((b) => /phq-?9/i.test(String(b.title ?? "")));
+      if (!hasPhq9) out = [phq9ElevatedBanner, ...out];
+    }
+    return out;
+  }, [dto, abnormalVitalsBanner, phq9ElevatedBanner]);
+  const recentAbnormalReviewCounts = useMemo<Record<Tab, number>>(
+    () => buildAbnormalNavCounts(dto, { recentMonths: 6 }),
+    [dto]
+  );
+  const abnormalAnyCounts = useMemo<Record<Tab, number>>(
+    () => buildAbnormalNavCounts(dto),
+    [dto]
+  );
+  const hasSnapshotAnyData =
+    snapshotProblems.length > 0 ||
+    snapshotMeds.length > 0 ||
+    snapshotAllergies.length > 0 ||
+    snapshotProcedures.length > 0 ||
+    snapshotVitals.length > 0 ||
+    snapshotLabs.length > 0 ||
+    phq9Rows.length > 0;
   const patientAge = useMemo(() => {
     return ageFromDob(personChart?.dob);
   }, [personChart?.dob]);
-  const ageTier = useMemo(() => ageTierFromAge(patientAge), [patientAge]);
-  const ageTierLabel = useMemo(() => {
-    if (ageTier === "u21") return "Under 21";
-    if (ageTier === "u60") return "21 to 59";
-    if (ageTier === "o60") return "60+";
-    return "Age unknown";
-  }, [ageTier]);
   const sexTone = useMemo(() => sexToneFromSex(dto?.patient?.sex), [dto?.patient?.sex]);
-  const selectedBannerEvidenceRows = useMemo(() => {
-    if (!selectedBanner || !dto?.resources) return [];
-    if (/^chronic burden:/i.test(selectedBanner.title)) {
-      const chronicProblems = (dto.snapshot?.problems ?? [])
-        .filter((p) => isChronicProblem(p, dto.resources))
-        .map((p, i) => {
-          const ev = p.evidence?.[0];
-          const key = ev ? `${ev.resourceType}/${ev.id}` : `Problem-${i}`;
-          return { key, label: `Problem: ${p.text}`, status: statusLine(p.evidence, dto.resources, p.status), evidence: ev };
-        });
-      const chronicMeds = (dto.snapshot?.meds ?? [])
-        .filter((m) => isChronicMedication(m, dto.resources))
-        .map((m, i) => {
-          const ev = m.evidence?.[0];
-          const key = ev ? `${ev.resourceType}/${ev.id}` : `Medication-${i}`;
-          return { key, label: `Medication: ${m.text}`, status: statusLine(m.evidence, dto.resources, m.status), evidence: ev };
-        });
-      return [...chronicProblems, ...chronicMeds];
-    }
-    if (/severe allerg/i.test(selectedBanner.title)) {
-      return (dto.snapshot?.allergies ?? [])
-        .filter((a) => isHighSeverityAllergy(a))
-        .map((a, i) => {
-          const ev = a.evidence?.[0];
-          const key = ev ? `${ev.resourceType}/${ev.id}` : `Allergy-${i}`;
-          return {
-            key,
-            label: `Allergy: ${a.text}`,
-            status: statusLine(a.evidence, dto.resources, a.criticality),
-            evidence: ev,
-          };
-        });
-    }
-    return selectedBanner.evidence.map((ev) => {
-      const key = `${ev.resourceType}/${ev.id}`;
-      const r: any = dto.resources?.[key];
-      let label = key;
-      if (r) {
-        if (r.resourceType === "Condition") label = r?.code?.text ?? r?.code?.coding?.[0]?.display ?? key;
-        else if (r.resourceType === "MedicationStatement" || r.resourceType === "MedicationRequest") label = r?.medicationCodeableConcept?.text ?? r?.medicationCodeableConcept?.coding?.[0]?.display ?? key;
-        else if (r.resourceType === "Observation") label = r?.code?.text ?? r?.code?.coding?.[0]?.display ?? key;
-        else if (r.resourceType === "AllergyIntolerance") label = r?.code?.text ?? r?.code?.coding?.[0]?.display ?? key;
-        else if (r.resourceType === "Encounter") label = r?.type?.[0]?.text ?? r?.type?.[0]?.coding?.[0]?.display ?? key;
-      }
-      return { key, label, status: statusLine([ev], dto.resources), evidence: ev };
-    });
-  }, [selectedBanner, dto]);
+  const selectedBannerEvidenceRows = useMemo(
+    () => buildSelectedBannerEvidenceRows(selectedBanner, dto),
+    [selectedBanner, dto]
+  );
+
+  const bannerExpanded = useMemo(() => buildBannerExpandedMap(dto), [dto]);
 
   function addLoadedBundle(id: string, nextDto: PatientInsightsDTO) {
     setLoadedBundles((prev) => {
@@ -278,12 +449,21 @@ export function PatientInsightsPage() {
       setDto(out);
       setErr(null);
       setSelectedBanner(null);
+      setSelectedPhq9Ref("");
+      setSelectedPhq9TabRef("");
       if (typeof window !== "undefined") {
         window.localStorage.setItem("pi_bundle_id", id);
       }
       addLoadedBundle(id, out);
     } catch (e: any) {
-      setErr(e?.message ?? "Failed to load insights");
+      const msg = String(e?.message ?? "");
+      const missingBundle = /HTTP 404/i.test(msg) || /Bundle not found/i.test(msg);
+      if (missingBundle && typeof window !== "undefined") {
+        window.localStorage.removeItem("pi_bundle_id");
+        setErr("Saved bundle is no longer available after server restart. Please choose and upload the bundle again.");
+        return;
+      }
+      setErr(msg || "Failed to load insights");
     }
   }
 
@@ -322,8 +502,17 @@ export function PatientInsightsPage() {
     void loadInsightsByBundleId(saved);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("pi_inspector_dock", inspectorDock);
+  }, [inspectorDock]);
+
+  useEffect(() => {
+    setShowRawEncounterJson(false);
+  }, [selectedEncounterKey]);
+
   return (
-    <div className={`pi sex-${sexTone}`}>
+    <div className={`pi sex-${sexTone} dock-${inspectorDock}`}>
       <aside className="pi-left">
         <div className="pi-brand">
           <img
@@ -346,7 +535,7 @@ export function PatientInsightsPage() {
                 <div className="pi-personchart-sub">{personChart?.hasPerson ? `Person/${personChart.id}` : `Patient/${personChart?.id ?? "n/a"} (fallback)`}</div>
                 <div className="pi-persongrid">
                   <div className="pi-personrow"><span>Name</span><strong>{personChart?.name ?? "n/a"}</strong></div>
-                  <div className="pi-personrow"><span>DOB</span><strong>{personChart?.dob ?? "n/a"}</strong></div>
+                  <div className="pi-personrow"><span>DOB</span><strong>{fmtUsDob(personChart?.dob)}</strong></div>
                   <div className="pi-personrow"><span>Gender</span><strong>{personChart?.gender ?? "n/a"}</strong></div>
                   <div className="pi-personrow"><span>Address</span><strong>{personChart?.address ?? "n/a"}</strong></div>
                   <div className="pi-personrow"><span>Contact</span><strong>{personChart?.contact ?? "n/a"}</strong></div>
@@ -365,13 +554,35 @@ export function PatientInsightsPage() {
             const Icon = n.icon;
             const active = tab === n.key;
             const count = navCounts[n.key] ?? 0;
+            const tone =
+              n.key === "snapshot"
+                ? "synopsis"
+                : n.key === "timeline"
+                  ? "timeline"
+                  : count <= 0
+                    ? "none"
+                    : count < 3
+                      ? "low"
+                      : count < 10
+                        ? "mid"
+                        : "high";
+            const showCount = n.key !== "timeline";
             return (
-              <button key={n.key} className={`pi-navbtn ${active ? "active" : ""}`} onClick={() => setTab(n.key)}>
+              <button key={n.key} className={`pi-navbtn tone-${tone} ${active ? "active" : ""}`} onClick={() => setTab(n.key)}>
                 <span className="pi-navbtn-l">
                   <Icon size={18} />
                   <span>{n.label}</span>
                 </span>
-                <span className="pi-navcount">{count}</span>
+                <span className="pi-nav-r">
+                  {showCount ? (
+                    <span className={`pi-navcount tone-${tone} ${abnormalAnyCounts[n.key] > 0 ? "pi-navcount-abnormal-any" : ""}`}>{count}</span>
+                  ) : null}
+                  {recentAbnormalReviewCounts[n.key] > 0 ? (
+                    <span className="pi-navreview" title={`${recentAbnormalReviewCounts[n.key]} abnormal item(s) in last 6 months to review`}>
+                      {recentAbnormalReviewCounts[n.key]}
+                    </span>
+                  ) : null}
+                </span>
               </button>
             );
           })}
@@ -385,7 +596,6 @@ export function PatientInsightsPage() {
 
       <main className="pi-main">
         <section className="pi-patient-tabs">
-          <div className="pi-patient-tabs-title">Loaded Patients</div>
           {loadedBundles.length === 0 ? (
             <div className="pi-muted">Load bundles to build patient tabs.</div>
           ) : (
@@ -409,20 +619,14 @@ export function PatientInsightsPage() {
                     setErr(null);
                     setSelected(null);
                     setSelectedEncounterKey("");
+                    setSelectedPhq9Ref("");
+                    setSelectedPhq9TabRef("");
                     setActiveBundleEntryKey(p.entryKey);
                   }}
                 >
                   <div className="pi-patient-tab-name">{p.name}</div>
-                  <div className="pi-patient-tab-meta">{p.sex ?? "—"} • DOB {p.dob ?? "—"}</div>
-                  <div className="pi-patient-tab-bands">
-                    <div className={`pi-patient-tier ${tier}`}>
-                      {tier === "u21" ? "Under 21" : tier === "u60" ? "21-59" : tier === "o60" ? "60+" : "Age unknown"}
-                      {age != null ? ` • ${age}y` : ""}
-                    </div>
-                    <div className={`pi-patient-sexband ${tabSexTone}`}>
-                      {tabSexTone === "male" ? "Male" : tabSexTone === "female" ? "Female" : "Other"}
-                    </div>
-                  </div>
+                  <div className="pi-patient-tab-meta">DOB {fmtUsDob(p.dob ?? "—")}</div>
+                  <div className="pi-patient-tab-age">{age != null ? `Age ${age}` : "Age unknown"}</div>
                 </button>
                   );
                 })()
@@ -431,31 +635,27 @@ export function PatientInsightsPage() {
           )}
         </section>
 
-        <header className="pi-header">
-          <div>
-            <div className="pi-title">{dto?.patient?.name ?? "Patient Insights"}</div>
-            <div className="pi-sub">
-              {dto?.patient?.sex ?? "—"}{patientAge != null ? ` • Age ${patientAge}` : ""} • DOB {dto?.patient?.dob ?? "—"} • {dto?.patient?.identifiers?.[0]?.value ?? ""}
-            </div>
-            <div className="pi-demographics">
-              <span className="pi-demotext">{ageTierLabel}</span>
-              <span className={`pi-sexbadge ${sexTone}`}>{sexTone === "male" ? "Male profile" : sexTone === "female" ? "Female profile" : "Profile"}</span>
-            </div>
-          </div>
-
-          <div className="pi-kpis">
-            <div className="pi-kpi">
-              <div className="pi-kpi-n">{dto?.banners?.length ?? 0}</div>
-              <div className="pi-kpi-l">Insights</div>
-            </div>
-            <div className="pi-kpi">
-              <div className="pi-kpi-n">{dto?.timeline?.length ?? 0}</div>
-              <div className="pi-kpi-l">Events</div>
-            </div>
-          </div>
-        </header>
+        <PatientHeader
+          patientName={dto?.patient?.name}
+          patientSex={dto?.patient?.sex}
+          patientAge={patientAge}
+          patientDob={dto?.patient?.dob}
+          patientIdentifier={dto?.patient?.identifiers?.[0]?.value}
+          insightsCount={displayBanners.length}
+          organizationVisitedCount={organizationVisitedCount}
+          locationVisitedCount={locationVisitedCount}
+          nextOfKinCount={nextOfKinCount}
+        />
 
         <section className="pi-top-right-tools">
+          <div className="pi-inspector-dock">
+            <span className="pi-inspector-dock-l">FHIR Inspector</span>
+            <div className="pi-inspector-switch">
+              <button className={`pi-inspector-btn ${inspectorDock === "right" ? "active" : ""}`} onClick={() => setInspectorDock("right")}>Right</button>
+              <button className={`pi-inspector-btn ${inspectorDock === "bottom" ? "active" : ""}`} onClick={() => setInspectorDock("bottom")}>Bottom</button>
+              <button className={`pi-inspector-btn ${inspectorDock === "hidden" ? "active" : ""}`} onClick={() => setInspectorDock("hidden")}>Hide</button>
+            </div>
+          </div>
           <div className="pi-uploader">
             <label className="pi-uploadbtn">
               <Upload size={18} />
@@ -478,7 +678,7 @@ export function PatientInsightsPage() {
             ) : (
               <div className="pi-detail-grid">
                 <div><strong>Name:</strong> {personChart?.name ?? "n/a"}{patientAge != null ? ` (${patientAge})` : ""}</div>
-                <div><strong>DOB:</strong> {personChart?.dob ?? "n/a"}</div>
+                <div><strong>DOB:</strong> {fmtUsDob(personChart?.dob)}</div>
                 <div><strong>Gender:</strong> {personChart?.gender ?? "n/a"}</div>
                 <div><strong>ID:</strong> {personChart?.id ?? "n/a"}</div>
                 <div><strong>Identifier:</strong> {personChart?.identifier ?? "n/a"}</div>
@@ -563,7 +763,7 @@ export function PatientInsightsPage() {
         )}
 
         <section className="pi-banners">
-          {(dto?.banners ?? []).length === 0 ? (
+          {displayBanners.length === 0 ? (
             <div className="pi-emptybanner">
               <AlertTriangle size={18} />
               <div>
@@ -572,29 +772,55 @@ export function PatientInsightsPage() {
               </div>
             </div>
           ) : (
-            dto!.banners.map((b, i) => (
+            displayBanners.map((b, i) => (
+              (() => {
+                const key = insightBannerKey(b);
+                const expanded = bannerExpanded.get(key);
+                return (
               <button
                 key={i}
                 className={`pi-banner ${b.severity}`}
                 onClick={() => {
-                  setSelectedBanner(b);
-                  setSelected(keyOf(b.evidence?.[0]));
+                  const isSame =
+                    selectedBanner?.title === b.title &&
+                    selectedBanner?.detail === b.detail &&
+                    selectedBanner?.occurredAt === b.occurredAt;
+                  setSelectedBanner((prev) => {
+                    const sameAsPrev =
+                      prev?.title === b.title &&
+                      prev?.detail === b.detail &&
+                      prev?.occurredAt === b.occurredAt;
+                    return sameAsPrev ? null : b;
+                  });
+                  if (!isSame) {
+                    setSelected(keyOf(b.evidence?.[0]));
+                  }
                 }}
               >
                 <div className="pi-banner-t">{b.title}</div>
-                <div className="pi-banner-d">{b.detail ?? ""}</div>
-                <div className="pi-banner-m">{b.occurredAt ?? ""}</div>
+                <div className="pi-banner-d">{expanded?.detail ?? b.detail ?? ""}</div>
+                <div className="pi-banner-m">{expanded?.occurredAt ?? b.occurredAt ?? ""}</div>
               </button>
+                );
+              })()
             ))
           )}
         </section>
         {selectedBanner && (
           <section className="pi-banner-details">
+            {(() => {
+              const key = insightBannerKey(selectedBanner);
+              const expanded = bannerExpanded.get(key);
+              return (
+                <>
             <div className="pi-banner-details-h">Insight Details</div>
             <div className="pi-banner-details-title">{selectedBanner.title}</div>
             <div className="pi-banner-details-sub">
-              {[selectedBanner.detail ?? "", selectedBanner.occurredAt ? `At: ${selectedBanner.occurredAt}` : ""].filter(Boolean).join(" • ")}
+              {[expanded?.detail ?? selectedBanner.detail ?? "", (expanded?.occurredAt ?? selectedBanner.occurredAt) ? `At: ${expanded?.occurredAt ?? selectedBanner.occurredAt}` : ""].filter(Boolean).join(" • ")}
             </div>
+                </>
+              );
+            })()}
             {selectedBannerEvidenceRows.length === 0 ? (
               <div className="pi-muted">No linked evidence on this insight.</div>
             ) : (
@@ -606,7 +832,7 @@ export function PatientInsightsPage() {
                       <span>{row.label}</span>
                       <span className="pi-row-status">{row.status}</span>
                     </span>
-                    <span className="pi-row-m">{row.key}</span>
+                    <span className="pi-row-m">{row.rightMeta ?? sourceLine(row.evidence ? [row.evidence] : undefined, dto?.resources)}</span>
                   </button>
                 ))}
               </div>
@@ -616,39 +842,50 @@ export function PatientInsightsPage() {
 
         {tab === "snapshot" && (
           <section className="pi-grid">
+            {!hasSnapshotAnyData ? (
+              <div className="pi-card">
+                <div className="pi-card-h">Synopsis</div>
+                <div className="pi-muted">No clinical items with data available in this bundle.</div>
+              </div>
+            ) : (
+              <>
+            {snapshotProblems.length > 0 && (
             <div className="pi-card">
               <div className="pi-card-h">Active Problems</div>
-              {(dto?.snapshot?.problems ?? []).length === 0 ? (
-                <div className="pi-muted">No problems extracted yet.</div>
-              ) : (
-                dto!.snapshot.problems.map((p, i) => (
+              {snapshotProblems.map((p, i) => (
                   (() => {
                     const chronic = isChronicProblem(p, dto?.resources);
+                    const onsetRaw = p.onset ?? clinicalDateOf(p.evidence, dto?.resources);
+                    const onsetText = `Onset: ${onsetRaw ? fmtAt(onsetRaw) : "n/a"}`;
+                    const source = metaSourceOf(p.evidence, dto?.resources) ?? "n/a";
+                    const rightMeta = `${onsetText}\nSource: ${source}`;
+                    const statusText = `Status: ${p.status ?? "n/a"}`;
                     return (
                   <button key={i} className={`pi-row ${chronic ? "pi-row-chronic" : ""}`} onClick={() => setSelected(keyOf(p.evidence?.[0]))}>
                     <span className="pi-dot" />
-                    <span className="pi-row-t"><span>{p.text}</span><span className={`pi-row-status ${chronic ? "pi-flag" : ""}`}>{`${chronic ? "Chronic • " : ""}${statusLine(p.evidence, dto?.resources, p.status)}`}</span></span>
-                    <span className="pi-row-m">{sourceLine(p.evidence, dto?.resources)}</span>
+                    <span className="pi-row-t">
+                      <span>{p.text}</span>
+                      <span className={`pi-row-status ${chronic ? "pi-flag" : ""}`}>{`${chronic ? "Chronic • " : ""}${statusText}`}</span>
+                    </span>
+                    <span className="pi-row-m">{rightMeta}</span>
                   </button>
                     );
                   })()
-                ))
-              )}
+                ))}
             </div>
+            )}
 
+            {snapshotMeds.length > 0 && (
             <div className="pi-card">
               <div className="pi-card-h">Medication Insights</div>
-              {(dto?.snapshot?.meds ?? []).length === 0 ? (
-                <div className="pi-muted">No meds extracted yet.</div>
-              ) : (
-                dto!.snapshot.meds.map((m, i) => {
+              {snapshotMeds.map((m, i) => {
                   const chronic = isChronicMedication(m, dto?.resources);
                   const dose = medicationDosageOf(m.evidence, dto?.resources, m.dosage);
                   const patientInstruction = medicationPatientInstructionOf(m.evidence, dto?.resources, m.patientInstruction);
                   return (
                     <button key={i} className={`pi-row ${chronic ? "pi-row-chronic" : ""}`} onClick={() => setSelected(keyOf(m.evidence?.[0]))}>
                       <span className="pi-pill" />
-                      <span className="pi-row-t">
+                      <span className="pi-row-t pi-row-t-stack">
                         <span>{m.text}</span>
                         <span className={`pi-row-status ${chronic ? "pi-flag" : ""}`}>{`${chronic ? "Chronic-condition med • " : ""}${dose ? `Dosage: ${dose} • ` : "Dosage: n/a • "}${patientInstruction ? `Patient Instruction: ${patientInstruction} • ` : ""}${statusLine(m.evidence, dto?.resources, m.status)}`}</span>
                       </span>
@@ -656,135 +893,123 @@ export function PatientInsightsPage() {
                     </button>
                   );
                 })
-              )}
+              }
             </div>
+            )}
 
+            {snapshotAllergies.length > 0 && (
             <div className="pi-card">
               <div className="pi-card-h">Allergies</div>
-              {(dto?.snapshot?.allergies ?? []).length === 0 ? (
-                <div className="pi-muted">No allergies extracted yet.</div>
-              ) : (
-                dto!.snapshot.allergies.map((a, i) => {
+              {snapshotAllergies.map((a, i) => {
                   const high = isHighSeverityAllergy(a);
                   const details = allergyDetailsOf(a.evidence, dto?.resources);
-                  const detailsLine = [
-                    details.manifestation ? `Manifestation: ${details.manifestation}` : "",
-                    details.note ? `Note: ${details.note}` : "",
-                    details.severity ? `Severity: ${details.severity}` : "",
-                  ].filter(Boolean).join(" • ");
+                  const at = clinicalDateOf(a.evidence, dto?.resources);
+                  const source = metaSourceOf(a.evidence, dto?.resources) ?? "n/a";
+                  const detailsLine = `Manifestation: ${details.manifestation || "n/a"} • Note: ${details.note || "n/a"} • Severity: ${details.severity || "n/a"}`;
+                  const rightMeta = `Onset: ${at ? fmtAt(at) : "n/a"}\nSource: ${source}`;
+                  const middleText = high
+                    ? `${detailsLine} • Abnormal • Value: ${abnormalValueOf(a.evidence, dto?.resources, a.criticality ?? "severe")} • Status: ${a.criticality ?? "n/a"}`
+                    : `${detailsLine} • Status: ${a.criticality ?? "n/a"}`;
                   return (
                     <button key={i} className={`pi-row ${high ? "pi-row-abnormal" : ""}`} onClick={() => setSelected(keyOf(a.evidence?.[0]))}>
                       <span className="pi-icon">A</span>
                       <span className="pi-row-t">
                         <span>{a.text}</span>
-                        <span className={`pi-row-status ${high ? "pi-flag" : ""}`}>
-                          {[detailsLine,
-                            high
-                            ? `Abnormal • Value: ${abnormalValueOf(a.evidence, dto?.resources, a.criticality ?? "severe")} • ${statusLine(a.evidence, dto?.resources, a.criticality)}`
-                            : statusLine(a.evidence, dto?.resources, a.criticality)]
-                            .filter(Boolean)
-                            .join(" • ")}
-                        </span>
+                        <span className={`pi-row-status ${high ? "pi-flag" : ""}`}>{middleText}</span>
                       </span>
-                      <span className="pi-row-m">{sourceLine(a.evidence, dto?.resources)}</span>
+                      <span className={`pi-row-m ${high ? "pi-flag" : ""}`}>{rightMeta}</span>
                     </button>
                   );
                 })
-              )}
+              }
             </div>
+            )}
 
+            {snapshotProcedures.length > 0 && (
             <div className="pi-card">
               <div className="pi-card-h">Procedures</div>
-              {(dto?.snapshot?.procedures ?? []).length === 0 ? (
-                <div className="pi-muted">No procedures extracted yet.</div>
-              ) : (
-                dto!.snapshot.procedures.map((p, i) => (
+              {snapshotProcedures.map((p, i) => (
                   <button key={i} className="pi-row" onClick={() => setSelected(keyOf(p.evidence?.[0]))}>
                     <span className="pi-icon">P</span>
                     <span className="pi-row-t"><span>{p.text}</span><span className={`pi-row-status ${isNonFinalStatus(p.evidence, dto?.resources) ? "pi-status-nonfinal" : ""}`}>{statusLine(p.evidence, dto?.resources, p.status)}</span></span>
                     <span className="pi-row-m">{sourceLine(p.evidence, dto?.resources)}</span>
                   </button>
-                ))
-              )}
+                ))}
             </div>
+            )}
 
+            {snapshotVitals.length > 0 && (
             <div className="pi-card">
               <div className="pi-card-h">Recent Vitals</div>
-              {(dto?.snapshot?.vitals ?? []).length === 0 ? (
-                <div className="pi-muted">No vitals extracted yet.</div>
-              ) : (
-                dto!.snapshot.vitals.map((v, i) => {
+              {snapshotVitals.map((v, i) => {
                   const abnormalTag = observationAbnormalTag(v.evidence, dto?.resources);
+                  const expectedRange = observationExpectedRange(v.evidence, dto?.resources);
                   const abnormal = !!abnormalTag;
                   return (
                   <button key={i} className={`pi-row ${abnormal ? "pi-row-abnormal" : ""}`} onClick={() => setSelected(keyOf(v.evidence?.[0]))}>
                     <span className="pi-icon">↗</span>
-                    <span className="pi-row-t"><span>{v.label}</span><span className={`pi-row-status ${abnormal ? "pi-flag" : ""} ${isNonFinalStatus(v.evidence, dto?.resources) ? "pi-status-nonfinal" : ""}`}>{`${abnormal ? `Abnormal (${abnormalTag}) • ` : ""}${statusLine(v.evidence, dto?.resources, undefined)}`}</span></span>
+                    <span className="pi-row-t pi-row-t-stack"><span>{v.label}</span><span className={`pi-row-status ${abnormal ? "pi-flag" : ""} ${isNonFinalStatus(v.evidence, dto?.resources) ? "pi-status-nonfinal" : ""}`}>{`${abnormal ? `Abnormal: ${abnormalTag ?? "Out of range"}${expectedRange ? ` • Expected: ${expectedRange}` : ""} • ` : ""}${statusLine(v.evidence, dto?.resources, undefined)}`}</span></span>
                     <span className="pi-row-m">{sourceLine(v.evidence, dto?.resources)}</span>
                   </button>
                   );
                 })
-              )}
+              }
             </div>
+            )}
 
+            {snapshotLabs.length > 0 && (
             <div className="pi-card">
               <div className="pi-card-h">Recent Labs</div>
-              {(dto?.snapshot?.labs ?? []).length === 0 ? (
-                <div className="pi-muted">No labs extracted yet.</div>
-              ) : (
-                dto!.snapshot.labs.map((l, i) => (
+              {snapshotLabs.map((l, i) => (
                   <button key={i} className={`pi-row ${l.flag ? "pi-row-abnormal" : ""}`} onClick={() => setSelected(keyOf(l.evidence?.[0]))}>
                     <span className="pi-icon">L</span>
                     <span className="pi-row-t">
                       <span>{l.label}</span>
-                      <span className={`pi-row-status ${l.flag ? "pi-flag" : ""}`}>
-                        {l.flag
-                          ? `Value: ${l.latest} (${l.flag}) • ${statusLine(l.evidence, dto?.resources, l.flag)}`
-                          : statusLine(l.evidence, dto?.resources, l.flag)}
+                    </span>
+                    <span className={`pi-row-m pi-row-m-stack ${l.flag ? "pi-flag" : ""}`}>
+                      <span>{sourceLine(l.evidence, dto?.resources)}</span>
+                      <span className={isNonFinalStatus(l.evidence, dto?.resources) ? "pi-status-nonfinal" : ""}>
+                        {(() => {
+                          const s = statusOf(l.evidence, dto?.resources) ?? l.flag ?? "n/a";
+                          return l.flag ? `Value: ${l.latest} (${l.flag}) • Status: ${s}` : `Value: ${l.latest} • Status: ${s}`;
+                        })()}
                       </span>
                     </span>
-                    <span className="pi-row-m">{sourceLine(l.evidence, dto?.resources)}</span>
                   </button>
-                ))
-              )}
+                ))}
             </div>
+            )}
 
+            {phq9Rows.length > 0 && (
             <div className="pi-card">
               <div className="pi-card-h">PHQ-9</div>
-              {phq9Rows.length === 0 ? (
-                <div className="pi-muted">No PHQ-9 extracted yet.</div>
-              ) : (
-                phq9Rows.map((item, i) => (
-                  <button key={i} className={`pi-row ${item.abnormal ? "pi-row-abnormal" : ""}`} onClick={() => setSelected(keyOf(item.row.evidence?.[0]))}>
-                    <span className="pi-icon">M</span>
-                    <span className="pi-row-t">
-                      <span>{item.row.label}</span>
-                      <span className={`pi-row-status ${item.abnormal ? "pi-flag" : ""}`}>
-                        {`${item.severity}${item.score != null ? ` • Score: ${item.score}` : ""} • ${statusLine(item.row.evidence, dto?.resources, item.row.latest)}`}
+              <>
+                  {phq9Rows.map((item, i) => (
+                    <button key={i} className={`pi-row ${item.abnormal ? "pi-row-abnormal" : ""}`} onClick={() => selectPhq9LinkedResource(item.row, "snapshot")}>
+                      <span className="pi-icon">M</span>
+                      <span className="pi-row-t">
+                        <span>{item.row.label}</span>
+                        <span className={`pi-row-status ${item.abnormal ? "pi-flag" : ""}`}>
+                          {`${item.severity}${item.score != null ? ` • Score: ${item.score}` : ""} • ${statusLine(item.row.evidence, dto?.resources, item.row.latest)}`}
+                        </span>
                       </span>
-                    </span>
-                    <span className="pi-row-m">{sourceLine(item.row.evidence, dto?.resources)}</span>
-                  </button>
-                ))
-              )}
+                      <span className="pi-row-m">{sourceLine(item.row.evidence, dto?.resources)}</span>
+                    </button>
+                  ))}
+                  <Phq9DetailPanel
+                    show={!!selectedPhq9Ref && !!selectedPhq9Response}
+                    emptyText="Select a PHQ-9 row above to render questionnaire questions and answers."
+                    authoredText={selectedPhq9Response?.authored ? fmtAt(selectedPhq9Response.authored) : "n/a"}
+                    statusText={selectedPhq9Response?.status ?? "n/a"}
+                    totalScore={selectedPhq9Total}
+                    items={selectedPhq9Items}
+                  />
+              </>
             </div>
+            )}
 
-            <div className="pi-card">
-              <div className="pi-card-h">Recent Activity</div>
-              {(dto?.timeline ?? []).length === 0 ? (
-                <div className="pi-muted">No timeline yet.</div>
-              ) : (
-                dto!.timeline.slice(0, 8).map((t, i) => (
-                  <button key={i} className="pi-time" onClick={() => setSelected(keyOf(t.evidence?.[0]))}>
-                    <div className="pi-time-at">{t.at}</div>
-                    <div className="pi-time-body">
-                      <div className="pi-time-l">{t.label}</div>
-                      <div className="pi-time-s">{t.summary ?? ""}</div>
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
+              </>
+            )}
           </section>
         )}
 
@@ -859,7 +1084,7 @@ export function PatientInsightsPage() {
                       {group.items.map((l, i) => (
                         <button key={`${group.label}-${i}`} className={`pi-row ${l.flag ? "pi-row-abnormal" : ""}`} onClick={() => setSelected(keyOf(l.evidence?.[0]))}>
                           <span className="pi-icon">L</span>
-                          <span className="pi-row-t">
+                          <span className="pi-row-t pi-row-t-stack">
                             <span>{l.latest}</span>
                             <span className={`pi-row-status ${l.flag ? "pi-flag" : ""} ${isNonFinalStatus(l.evidence, dto?.resources) ? "pi-status-nonfinal" : ""}`}>
                               {l.flag
@@ -887,10 +1112,10 @@ export function PatientInsightsPage() {
               ) : (
                 <>
                   <div className="pi-h-timeline-wrap">
-                    <div className="pi-h-timeline-line" />
                     <div className="pi-h-timeline">
-                      {timelineColumns.map((col) => (
-                        <div key={col.key} className="pi-h-slot">
+                      {timelineColumns.map((col, colIndex) => (
+                        <div key={col.key} className={`pi-h-slot ${colIndex > 0 ? "month-split" : ""}`}>
+                          <div className="pi-h-month">{fmtMonthKey(col.key)}</div>
                           <div className="pi-h-stack above">
                             {col.encounters.map((t, i) => (
                               (() => {
@@ -913,18 +1138,13 @@ export function PatientInsightsPage() {
                                 </div>
                                 <div className="pi-h-event-title">{t.label}</div>
                                 <div className="pi-h-event-sub">
-                                  {`Class: ${details.classLabel} • Location: ${details.location} • Practitioner: ${details.practitioner} • Source: ${details.source} • ${statusLine(t.evidence, dto?.resources, t.summary)}`}
+                                  {`Class: ${details.classLabel} • Location: ${details.location} • Source: ${details.source}`}
                                 </div>
                               </button>
                                 );
                               })()
                             ))}
                           </div>
-                          <div className="pi-h-mid">
-                            <div className="pi-h-event-dot encounter" />
-                            <div className="pi-h-mid-date">{fmtMonthKey(col.key)}</div>
-                          </div>
-                          <div className="pi-h-stack below" />
                         </div>
                       ))}
                     </div>
@@ -935,18 +1155,33 @@ export function PatientInsightsPage() {
                     ) : (
                       <>
                         <div className="pi-card-h">Encounter Details</div>
-                        <div className="pi-detail-grid">
+                        <div className="pi-detail-grid pi-detail-grid-encounter">
                           <div><strong>Date:</strong> {selectedEncounterEvent ? fmtAt(selectedEncounterEvent.at) : "—"}</div>
-                          <div><strong>Status:</strong> {selectedEncounter?.status ?? "—"}</div>
                           <div><strong>Class:</strong> {selectedEncounter?.class?.code ?? selectedEncounter?.class?.display ?? "—"}</div>
+                          <div><strong>Status:</strong> {selectedEncounter?.status ?? "—"}</div>
                           <div><strong>Type:</strong> {selectedEncounterEvent?.label ?? "Encounter"}</div>
                         </div>
                         <div className="pi-card-h">Related Events (Next 14 Days)</div>
                         {selectedEncounterRelatedEvents.length === 0 ? (
                           <div className="pi-muted">No related events in the 14-day window after this encounter.</div>
                         ) : (
-                          selectedEncounterRelatedByType.map((group) => (
-                            <div key={group.kind} className="pi-type-group">
+                          <>
+                            <div className="pi-timeline-anchors">
+                              {selectedEncounterRelatedByType.map((group) => {
+                                const MetaIcon = timelineKindMeta.find((m) => m.kind === group.kind)?.icon ?? FileText;
+                                return (
+                                  <a key={`jump-${group.kind}`} href={`#timeline-group-${group.kind}`} className="pi-timeline-anchor pi-navbtn">
+                                    <span className="pi-navbtn-l">
+                                      <MetaIcon size={16} />
+                                      <span>{group.label}</span>
+                                    </span>
+                                    <span className="pi-navcount tone-mid">{group.items.length}</span>
+                                  </a>
+                                );
+                              })}
+                            </div>
+                          {selectedEncounterRelatedByType.map((group) => (
+                            <div id={`timeline-group-${group.kind}`} key={group.kind} className={`pi-type-group kind-${group.kind}`}>
                               <div className="pi-type-group-h">{group.label}</div>
                               {group.kind === "vital" && selectedEncounterVitalSeries.length > 0 && (
                                 <div className="pi-vitalmini-wrap">
@@ -985,6 +1220,7 @@ export function PatientInsightsPage() {
                               {group.items.map((e, i) => {
                                 const Icon = timelineKindMeta.find((m) => m.kind === e.kind)?.icon ?? FileText;
                                 const vitalAbnormalTag = e.kind === "vital" ? observationAbnormalTag(e.evidence, dto?.resources) : undefined;
+                                const vitalExpectedRange = e.kind === "vital" ? observationExpectedRange(e.evidence, dto?.resources) : undefined;
                                 const abnormal = !!vitalAbnormalTag || isAbnormalEvent(e);
                                 const itemValue = clinicalItemValue(e, dto?.resources);
                                 return (
@@ -994,7 +1230,7 @@ export function PatientInsightsPage() {
                                       <span>{e.label}</span>
                                       <span className={`pi-row-status ${abnormal ? "pi-flag" : ""} ${isNonFinalStatus(e.evidence, dto?.resources) ? "pi-status-nonfinal" : ""}`}>
                                         {abnormal
-                                          ? `${vitalAbnormalTag ? `Abnormal (${vitalAbnormalTag})` : "Abnormal"} • Value: ${abnormalValueOf(e.evidence, dto?.resources, itemValue ?? "n/a")} • ${statusLine(e.evidence, dto?.resources, undefined)}`
+                                          ? `${vitalAbnormalTag ? `Abnormal: ${vitalAbnormalTag}` : "Abnormal: Out of range"}${vitalExpectedRange ? ` • Expected: ${vitalExpectedRange}` : ""} • Value: ${abnormalValueOf(e.evidence, dto?.resources, itemValue ?? "n/a")} • ${statusLine(e.evidence, dto?.resources, undefined)}`
                                           : statusLine(e.evidence, dto?.resources, undefined)}
                                       </span>
                                     </span>
@@ -1003,10 +1239,19 @@ export function PatientInsightsPage() {
                                 );
                               })}
                             </div>
-                          ))
+                          ))}
+                          </>
                         )}
                         <div className="pi-card-h">Raw Encounter Resource</div>
-                        <pre className="pi-json pi-json-inline">{JSON.stringify(selectedEncounter, null, 2)}</pre>
+                        <button
+                          className={`pi-inspector-btn ${showRawEncounterJson ? "active" : ""}`}
+                          onClick={() => setShowRawEncounterJson((prev) => !prev)}
+                        >
+                          {showRawEncounterJson ? "Hide raw FHIR JSON" : "View raw FHIR JSON"}
+                        </button>
+                        {showRawEncounterJson && (
+                          <pre className="pi-json pi-json-inline">{JSON.stringify(selectedEncounter, null, 2)}</pre>
+                        )}
                       </>
                     )}
                   </div>
@@ -1037,10 +1282,10 @@ export function PatientInsightsPage() {
                         <span className="pi-row-t">
                           <span>{e.label}</span>
                           <span className="pi-row-status">
-                            {`Class: ${details.classLabel} • Location: ${details.location} • Practitioner: ${details.practitioner} • Source: ${details.source} • ${statusLine(e.evidence, dto?.resources, e.summary)}`}
+                            {`Class: ${details.classLabel} • Location: ${details.location} • Practitioner: ${details.practitioner} • ${statusLine(e.evidence, dto?.resources, e.summary)}`}
                           </span>
                         </span>
-                        <span className="pi-row-m">{fmtAt(e.at)}</span>
+                        <span className="pi-row-m">{sourceLine(e.evidence, dto?.resources, e.at)}</span>
                       </button>
                     );
                   })
@@ -1059,11 +1304,19 @@ export function PatientInsightsPage() {
                 dto!.snapshot.problems.map((p, i) => (
                   (() => {
                     const chronic = isChronicProblem(p, dto?.resources);
+                    const onsetRaw = p.onset ?? clinicalDateOf(p.evidence, dto?.resources);
+                    const onsetText = `Onset: ${onsetRaw ? fmtAt(onsetRaw) : "n/a"}`;
+                    const source = metaSourceOf(p.evidence, dto?.resources) ?? "n/a";
+                    const rightMeta = `${onsetText}\nSource: ${source}`;
+                    const statusText = `Status: ${p.status ?? "n/a"}`;
                     return (
                   <button key={i} className={`pi-row ${chronic ? "pi-row-chronic" : ""}`} onClick={() => setSelected(keyOf(p.evidence?.[0]))}>
                     <span className="pi-dot" />
-                    <span className="pi-row-t"><span>{p.text}</span><span className={`pi-row-status ${chronic ? "pi-flag" : ""}`}>{`${chronic ? "Chronic • " : ""}${statusLine(p.evidence, dto?.resources, p.status)}`}</span></span>
-                    <span className="pi-row-m">{sourceLine(p.evidence, dto?.resources)}</span>
+                    <span className="pi-row-t">
+                      <span>{p.text}</span>
+                      <span className={`pi-row-status ${chronic ? "pi-flag" : ""}`}>{`${chronic ? "Chronic • " : ""}${statusText}`}</span>
+                    </span>
+                    <span className="pi-row-m">{rightMeta}</span>
                   </button>
                     );
                   })()
@@ -1082,11 +1335,12 @@ export function PatientInsightsPage() {
               ) : (
                 dto!.snapshot.vitals.map((v, i) => {
                   const abnormalTag = observationAbnormalTag(v.evidence, dto?.resources);
+                  const expectedRange = observationExpectedRange(v.evidence, dto?.resources);
                   const abnormal = !!abnormalTag;
                   return (
                   <button key={i} className={`pi-row ${abnormal ? "pi-row-abnormal" : ""}`} onClick={() => setSelected(keyOf(v.evidence?.[0]))}>
                     <span className="pi-icon">↗</span>
-                    <span className="pi-row-t"><span>{v.label}</span><span className={`pi-row-status ${abnormal ? "pi-flag" : ""} ${isNonFinalStatus(v.evidence, dto?.resources) ? "pi-status-nonfinal" : ""}`}>{`${abnormal ? `Abnormal (${abnormalTag}) • ` : ""}${statusLine(v.evidence, dto?.resources, v.trend)}`}</span></span>
+                    <span className="pi-row-t pi-row-t-stack"><span>{v.label}</span><span className={`pi-row-status ${abnormal ? "pi-flag" : ""} ${isNonFinalStatus(v.evidence, dto?.resources) ? "pi-status-nonfinal" : ""}`}>{`${abnormal ? `Abnormal: ${abnormalTag ?? "Out of range"}${expectedRange ? ` • Expected: ${expectedRange}` : ""} • ` : ""}${statusLine(v.evidence, dto?.resources, v.trend)}`}</span></span>
                     <span className="pi-row-m">{sourceLine(v.evidence, dto?.resources)}</span>
                   </button>
                   );
@@ -1129,7 +1383,7 @@ export function PatientInsightsPage() {
                   return (
                     <button key={i} className={`pi-row ${chronic ? "pi-row-chronic" : ""}`} onClick={() => setSelected(keyOf(m.evidence?.[0]))}>
                       <span className="pi-pill" />
-                      <span className="pi-row-t"><span>{m.text}</span><span className={`pi-row-status ${chronic ? "pi-flag" : ""}`}>{`${chronic ? "Chronic-condition med • " : ""}${dose ? `Dosage: ${dose} • ` : "Dosage: n/a • "}${patientInstruction ? `Patient Instruction: ${patientInstruction} • ` : ""}${statusLine(m.evidence, dto?.resources, m.status ?? m.changed)}`}</span></span>
+                      <span className="pi-row-t pi-row-t-stack"><span>{m.text}</span><span className={`pi-row-status ${chronic ? "pi-flag" : ""}`}>{`${chronic ? "Chronic-condition med • " : ""}${dose ? `Dosage: ${dose} • ` : "Dosage: n/a • "}${patientInstruction ? `Patient Instruction: ${patientInstruction} • ` : ""}${statusLine(m.evidence, dto?.resources, m.status ?? m.changed)}`}</span></span>
                       <span className="pi-row-m">{sourceLine(m.evidence, dto?.resources)}</span>
                     </button>
                   );
@@ -1168,26 +1422,21 @@ export function PatientInsightsPage() {
                 dto!.snapshot.allergies.map((a, i) => {
                   const high = isHighSeverityAllergy(a);
                   const details = allergyDetailsOf(a.evidence, dto?.resources);
-                  const detailsLine = [
-                    details.manifestation ? `Manifestation: ${details.manifestation}` : "",
-                    details.note ? `Note: ${details.note}` : "",
-                    details.severity ? `Severity: ${details.severity}` : "",
-                  ].filter(Boolean).join(" • ");
+                  const at = clinicalDateOf(a.evidence, dto?.resources);
+                  const source = metaSourceOf(a.evidence, dto?.resources) ?? "n/a";
+                  const detailsLine = `Manifestation: ${details.manifestation || "n/a"} • Note: ${details.note || "n/a"} • Severity: ${details.severity || "n/a"}`;
+                  const rightMeta = `Onset: ${at ? fmtAt(at) : "n/a"}\nSource: ${source}`;
+                  const middleText = high
+                    ? `${detailsLine} • Abnormal • Value: ${abnormalValueOf(a.evidence, dto?.resources, a.criticality ?? "severe")} • Status: ${a.criticality ?? "n/a"}`
+                    : `${detailsLine} • Status: ${a.criticality ?? "n/a"}`;
                   return (
                   <button key={i} className={`pi-row ${high ? "pi-row-abnormal" : ""}`} onClick={() => setSelected(keyOf(a.evidence?.[0]))}>
                     <span className="pi-icon">A</span>
                     <span className="pi-row-t">
                       <span>{a.text}</span>
-                      <span className={`pi-row-status ${high ? "pi-flag" : ""}`}>
-                        {[detailsLine,
-                          high
-                          ? `Abnormal • Value: ${abnormalValueOf(a.evidence, dto?.resources, a.criticality ?? "severe")} • ${statusLine(a.evidence, dto?.resources, a.criticality)}`
-                          : statusLine(a.evidence, dto?.resources, a.criticality)]
-                          .filter(Boolean)
-                          .join(" • ")}
-                      </span>
+                      <span className={`pi-row-status ${high ? "pi-flag" : ""}`}>{middleText}</span>
                     </span>
-                    <span className="pi-row-m">{sourceLine(a.evidence, dto?.resources)}</span>
+                    <span className={`pi-row-m ${high ? "pi-flag" : ""}`}>{rightMeta}</span>
                   </button>
                   );
                 })
@@ -1219,10 +1468,10 @@ export function PatientInsightsPage() {
           <section className="pi-placeholder">
             <div className="pi-placeholder-card">
               <div className="pi-placeholder-title">MENTAL STATUS</div>
-              {(dto?.snapshot?.mentalStatus ?? []).length === 0 ? (
+              {mentalRows.length === 0 ? (
                 <div className="pi-muted">No mental status extracted yet.</div>
               ) : (
-                dto!.snapshot.mentalStatus.map((m, i) => (
+                mentalRows.map((m, i) => (
                   <button key={i} className="pi-row" onClick={() => setSelected(keyOf(m.evidence?.[0]))}>
                     <span className="pi-icon">M</span>
                     <span className="pi-row-t">
@@ -1239,7 +1488,39 @@ export function PatientInsightsPage() {
           </section>
         )}
 
-        {tab !== "snapshot" && tab !== "labs" && tab !== "timeline" && tab !== "encounters" && tab !== "problems" && tab !== "procedures" && tab !== "vitals" && tab !== "meds" && tab !== "immunizations" && tab !== "allergies" && tab !== "social" && tab !== "mental" && (
+        {tab === "phq9" && (
+          <section className="pi-placeholder">
+            <div className="pi-placeholder-card">
+              <div className="pi-placeholder-title">PHQ-9</div>
+              {phq9Rows.length === 0 ? (
+                <div className="pi-muted">No PHQ-9 extracted yet.</div>
+              ) : (
+                phq9Rows.map((item, i) => (
+                  <button key={i} className={`pi-row ${item.abnormal ? "pi-row-abnormal" : ""}`} onClick={() => selectPhq9LinkedResource(item.row, "phq9")}>
+                    <span className="pi-icon">M</span>
+                    <span className="pi-row-t">
+                      <span>{item.row.label}</span>
+                      <span className={`pi-row-status ${item.abnormal ? "pi-flag" : ""}`}>
+                        {`${item.severity}${item.score != null ? ` • Score: ${item.score}` : ""} • ${statusLine(item.row.evidence, dto?.resources, item.row.latest)}`}
+                      </span>
+                    </span>
+                    <span className="pi-row-m">{sourceLine(item.row.evidence, dto?.resources)}</span>
+                  </button>
+                ))
+              )}
+              <Phq9DetailPanel
+                show={!!selectedPhq9TabRef && !!selectedPhq9Response}
+                emptyText="Select a PHQ-9 row above to render the questionnaire form."
+                authoredText={selectedPhq9Response?.authored ? fmtAt(selectedPhq9Response.authored) : "n/a"}
+                statusText={selectedPhq9Response?.status ?? "n/a"}
+                totalScore={selectedPhq9Total}
+                items={selectedPhq9Items}
+              />
+            </div>
+          </section>
+        )}
+
+        {tab !== "snapshot" && tab !== "labs" && tab !== "timeline" && tab !== "encounters" && tab !== "problems" && tab !== "procedures" && tab !== "vitals" && tab !== "meds" && tab !== "immunizations" && tab !== "allergies" && tab !== "social" && tab !== "mental" && tab !== "phq9" && (
           <section className="pi-placeholder">
             <div className="pi-placeholder-card">
               <div className="pi-placeholder-title">{tab.toUpperCase()}</div>
